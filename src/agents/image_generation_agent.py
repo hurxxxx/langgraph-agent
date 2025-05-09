@@ -186,15 +186,16 @@ class ImageGenerationAgent:
             # If no pattern is found, use the whole message
             return message
 
-    def _save_image_locally(self, image_url: str, prompt: str, model: str, size: str) -> Dict[str, Any]:
+    def _save_image_locally(self, image_url: str, prompt: str, model: str, size: str, max_retries: int = 3) -> Dict[str, Any]:
         """
-        Save an image from a URL to local storage.
+        Save an image from a URL to local storage with retry logic.
 
         Args:
             image_url: URL of the image
             prompt: Image generation prompt
             model: Model used to generate the image
             size: Size of the generated image
+            max_retries: Maximum number of retries for transient errors
 
         Returns:
             Dict[str, Any]: Information about the saved image
@@ -208,63 +209,128 @@ class ImageGenerationAgent:
                 "verified": False
             }
 
-        try:
-            # Generate a unique filename
-            extension = get_file_extension(image_url)
-            local_path = generate_unique_filename(
-                self.images_dir,
-                prefix=f"{model.replace('-', '_')}",
-                extension=extension
-            )
+        retry_count = 0
+        last_error = None
 
-            # Download the image
-            download_file(image_url, local_path, timeout=self.config.download_timeout)
+        while retry_count < max_retries:
+            try:
+                # Generate a unique filename
+                extension = get_file_extension(image_url)
+                local_path = generate_unique_filename(
+                    self.images_dir,
+                    prefix=f"{model.replace('-', '_')}",
+                    extension=extension
+                )
 
-            # Verify the file exists and get its size
-            if verify_file_exists(local_path):
-                file_size = get_file_size(local_path)
-                verified = True
-            else:
-                file_size = 0
-                verified = False
+                # Download the image with timeout
+                print(f"Downloading image from {image_url} to {local_path} (attempt {retry_count + 1}/{max_retries})")
+                download_file(image_url, local_path, timeout=self.config.download_timeout)
 
-            # Create metadata
-            created_at = time.time()
-            metadata = {
-                "prompt": prompt,
-                "model": model,
-                "size": size,
-                "image_url": image_url,
-                "local_path": local_path,
-                "file_size": file_size,
-                "created_at": created_at,
-                "verified": verified
-            }
+                # Verify the file exists and get its size
+                if verify_file_exists(local_path):
+                    file_size = get_file_size(local_path)
 
-            # Save metadata
-            metadata_path = os.path.join(
-                self.metadata_dir,
-                f"{os.path.basename(local_path).split('.')[0]}.json"
-            )
-            save_metadata(metadata, metadata_path)
+                    # Additional verification: check if file size is reasonable (not empty or too small)
+                    if file_size < 100:  # Less than 100 bytes is suspicious for an image
+                        print(f"Warning: Downloaded file is very small ({file_size} bytes), might be corrupted")
+                        if retry_count < max_retries - 1:
+                            retry_count += 1
+                            print(f"Retrying download in {retry_count} seconds...")
+                            time.sleep(retry_count)
+                            continue
 
-            return {
-                "local_path": local_path,
-                "file_size": file_size,
-                "created_at": created_at,
-                "metadata_path": metadata_path,
-                "verified": verified
-            }
-        except Exception as e:
-            print(f"Error saving image locally: {str(e)}")
-            return {
-                "local_path": None,
-                "file_size": None,
-                "created_at": time.time(),
-                "metadata_path": None,
-                "verified": False,
-                "error": str(e)
-            }
+                    verified = True
+                else:
+                    # File doesn't exist after download attempt
+                    if retry_count < max_retries - 1:
+                        retry_count += 1
+                        print(f"Download failed, retrying in {retry_count} seconds...")
+                        time.sleep(retry_count)
+                        continue
+
+                    file_size = 0
+                    verified = False
+
+                # Create metadata
+                created_at = time.time()
+                metadata = {
+                    "prompt": prompt,
+                    "model": model,
+                    "size": size,
+                    "image_url": image_url,
+                    "local_path": local_path,
+                    "file_size": file_size,
+                    "created_at": created_at,
+                    "verified": verified
+                }
+
+                # Save metadata
+                metadata_path = os.path.join(
+                    self.metadata_dir,
+                    f"{os.path.basename(local_path).split('.')[0]}.json"
+                )
+                save_metadata(metadata, metadata_path)
+
+                return {
+                    "local_path": local_path,
+                    "file_size": file_size,
+                    "created_at": created_at,
+                    "metadata_path": metadata_path,
+                    "verified": verified
+                }
+
+            except requests.exceptions.Timeout:
+                last_error = "Request timed out"
+                print(f"Timeout downloading image (attempt {retry_count + 1}/{max_retries})")
+
+                if retry_count < max_retries - 1:
+                    retry_count += 1
+                    print(f"Retrying in {retry_count} seconds...")
+                    time.sleep(retry_count)
+                else:
+                    break
+
+            except requests.exceptions.ConnectionError:
+                last_error = "Connection error"
+                print(f"Connection error downloading image (attempt {retry_count + 1}/{max_retries})")
+
+                if retry_count < max_retries - 1:
+                    retry_count += 1
+                    print(f"Retrying in {retry_count} seconds...")
+                    time.sleep(retry_count)
+                else:
+                    break
+
+            except Exception as e:
+                last_error = str(e)
+                print(f"Error saving image locally (attempt {retry_count + 1}/{max_retries}): {str(e)}")
+
+                # Check if it's a transient error
+                error_str = str(e).lower()
+                is_transient = any(term in error_str for term in [
+                    "timeout", "connection", "network", "temporary",
+                    "rate limit", "too many requests", "503", "502"
+                ])
+
+                if is_transient and retry_count < max_retries - 1:
+                    retry_count += 1
+                    print(f"Transient error, retrying in {retry_count} seconds...")
+                    time.sleep(retry_count)
+                else:
+                    break
+
+        # If we get here, all retries failed
+        error_message = last_error if last_error else "Unknown error saving image"
+        print(f"Failed to save image after {max_retries} attempts: {error_message}")
+
+        return {
+            "local_path": None,
+            "file_size": None,
+            "created_at": time.time(),
+            "metadata_path": None,
+            "verified": False,
+            "error": error_message
+        }
 
     def generate_image_dalle(self, prompt: str) -> ImageGenerationResult:
         """
@@ -383,54 +449,144 @@ class ImageGenerationAgent:
         Returns:
             Dict[str, Any]: Updated state
         """
-        # Extract the message from the last message
-        message = state["messages"][-1]["content"]
-
-        # Extract the image description
-        image_description = self._extract_image_description(message)
-
-        # Generate the image
         try:
-            result = self.generate_image(image_description)
+            # Extract the message from the last message
+            message = state["messages"][-1]["content"]
 
-            # Format the result for the LLM
-            formatted_result = f"""
-            Image generated successfully!
-            Prompt: {result.prompt}
-            Model: {result.model}
-            Size: {result.size}
-            Image URL: {result.image_url}
-            """
+            # Check if we have a subtask in the state (used by MCP)
+            if "current_subtask" in state and state["current_subtask"]:
+                subtask = state["current_subtask"]
+                if "description" in subtask:
+                    # Use the subtask description as the message
+                    message = subtask["description"]
+                    print(f"Using subtask description for image generation: {message}")
 
-            # Add local file information if available
-            if result.local_path:
-                formatted_result += f"""
-                Local File Path: {result.local_path}
-                File Size: {result.file_size} bytes
-                Verified: {result.verified}
+            # Extract the image description
+            image_description = self._extract_image_description(message)
+
+            # Check if we have a valid image description
+            if not image_description or len(image_description.strip()) < 5:
+                # If the description is too short or empty, try to use the full message
+                print(f"Image description too short: '{image_description}', using full message")
+                image_description = message
+
+            # Generate the image
+            try:
+                result = self.generate_image(image_description)
+
+                # Format the result for the LLM
+                formatted_result = f"""
+                Image generated successfully!
+                Prompt: {result.prompt}
+                Model: {result.model}
+                Size: {result.size}
+                Image URL: {result.image_url}
                 """
 
-            error = None
-        except Exception as e:
-            formatted_result = f"Error generating image: {str(e)}"
-            error = str(e)
-            result = None
+                # Add local file information if available
+                if result.local_path:
+                    formatted_result += f"""
+                    Local File Path: {result.local_path}
+                    File Size: {result.file_size} bytes
+                    Verified: {result.verified}
+                    """
 
-        # Generate response using LLM
-        response = self.llm.invoke(
-            self.prompt.format(
-                messages=state["messages"],
-                generation_results=formatted_result
+                error = None
+                has_error = False
+
+                # Check if the image was verified successfully
+                if not result.verified and result.local_path:
+                    error = "Image was generated but could not be verified"
+                    has_error = True
+                    formatted_result += f"\nWarning: {error}"
+
+            except Exception as e:
+                formatted_result = f"Error generating image: {str(e)}"
+                error = str(e)
+                result = None
+                has_error = True
+
+                # Get detailed error information
+                import traceback
+                trace = traceback.format_exc()
+                print(f"Detailed image generation error: {trace}")
+
+            # Generate response using LLM
+            response = self.llm.invoke(
+                self.prompt.format(
+                    messages=state["messages"],
+                    generation_results=formatted_result
+                )
             )
-        )
 
-        # Update state
-        if result:
-            state["agent_outputs"]["image_generation"] = result.model_dump()
-        else:
-            state["agent_outputs"]["image_generation"] = {"error": error}
+            # Extract content from response
+            if isinstance(response, dict):
+                content = response.get("content", "No image generation results available")
+            elif hasattr(response, "content"):
+                content = response.content
+            else:
+                content = str(response)
 
-        state["messages"].append({"role": "assistant", "content": response.content})
+            # Update state
+            if result:
+                # Use model_dump() for Pydantic v2 compatibility
+                if hasattr(result, "model_dump"):
+                    result_dict = result.model_dump()
+                # Fallback for Pydantic v1
+                elif hasattr(result, "dict"):
+                    result_dict = result.dict()
+                # Last resort fallback
+                else:
+                    result_dict = vars(result) if hasattr(result, "__dict__") else {"error": "Could not serialize result"}
+
+                state["agent_outputs"]["image_generation_agent"] = result_dict
+
+                # Add error information if verification failed
+                if has_error:
+                    state["agent_outputs"]["image_generation_agent"]["error"] = error
+                    state["agent_outputs"]["image_generation_agent"]["has_error"] = True
+
+                    # If this is a subtask in MCP, mark it for potential fallback
+                    if "current_subtask" in state:
+                        state["agent_outputs"]["image_generation_agent"]["needs_fallback"] = True
+            else:
+                state["agent_outputs"]["image_generation_agent"] = {
+                    "error": error,
+                    "has_error": True
+                }
+
+                # If this is a subtask in MCP, mark it for potential fallback
+                if "current_subtask" in state:
+                    state["agent_outputs"]["image_generation_agent"]["needs_fallback"] = True
+
+            state["messages"].append({"role": "assistant", "content": content})
+
+        except Exception as e:
+            # Handle errors gracefully
+            error_message = f"Image generation agent encountered an error: {str(e)}"
+            print(error_message)
+
+            # Get detailed error information
+            import traceback
+            trace = traceback.format_exc()
+            print(f"Detailed error: {trace}")
+
+            # Update state with error information
+            state["agent_outputs"]["image_generation_agent"] = {
+                "error": str(e),
+                "traceback": trace,
+                "has_error": True
+            }
+
+            # If this is a subtask in MCP, mark it for potential fallback
+            if "current_subtask" in state:
+                state["agent_outputs"]["image_generation_agent"]["needs_fallback"] = True
+
+            # Add error response to messages
+            state["messages"].append({
+                "role": "assistant",
+                "content": f"I apologize, but I encountered an error while generating the image: {str(e)}. Please try again with a different description or image generation provider."
+            })
 
         return state
 

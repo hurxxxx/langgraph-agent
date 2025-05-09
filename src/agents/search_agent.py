@@ -202,30 +202,87 @@ class SearchAgent:
 
         return formatted_results
 
-    def search(self, query: str) -> List[SearchResult]:
+    def search(self, query: str, max_retries: int = 3) -> List[SearchResult]:
         """
         Perform a search using the configured provider.
 
         Args:
             query: Search query
+            max_retries: Maximum number of retries for transient errors
 
         Returns:
             List[SearchResult]: Search results
         """
-        raw_results = self.search_tool.invoke(query)
+        retry_count = 0
+        last_error = None
 
-        # Handle different return types from different providers
-        if not isinstance(raw_results, list):
-            if self.config.provider == "serper":
-                # Serper returns a dictionary with organic results
-                if isinstance(raw_results, dict) and "organic" in raw_results:
-                    raw_results = raw_results["organic"]
+        while retry_count < max_retries:
+            try:
+                raw_results = self.search_tool.invoke(query)
+
+                # Handle different return types from different providers
+                if not isinstance(raw_results, list):
+                    if self.config.provider == "serper":
+                        # Serper returns a dictionary with organic results
+                        if isinstance(raw_results, dict) and "organic" in raw_results:
+                            raw_results = raw_results["organic"]
+                        elif isinstance(raw_results, dict) and "error" in raw_results:
+                            # Handle Serper API error
+                            error_msg = raw_results.get("error", "Unknown Serper API error")
+                            print(f"Serper API error: {error_msg}")
+
+                            # Check if it's a rate limit error (common with API services)
+                            if "rate limit" in error_msg.lower() or "quota" in error_msg.lower():
+                                # This is a transient error, retry after a delay
+                                retry_count += 1
+                                if retry_count < max_retries:
+                                    print(f"Rate limit hit, retrying in {retry_count} seconds...")
+                                    time.sleep(retry_count)  # Exponential backoff
+                                    continue
+
+                            # Return a helpful error message as a search result
+                            return [SearchResult(
+                                title="Search Error",
+                                url="",
+                                snippet=f"Error searching with Serper: {error_msg}. Please try again later."
+                            )]
+                        else:
+                            raw_results = [raw_results]
+                    else:
+                        raw_results = [raw_results]
+
+                return self._format_search_results(raw_results)
+
+            except Exception as e:
+                last_error = e
+                print(f"Search error (attempt {retry_count + 1}/{max_retries}): {str(e)}")
+
+                # Check if it's a connection error or timeout (common transient errors)
+                error_str = str(e).lower()
+                is_transient = any(term in error_str for term in [
+                    "timeout", "connection", "network", "temporary",
+                    "rate limit", "too many requests", "503", "502"
+                ])
+
+                if is_transient and retry_count < max_retries - 1:
+                    # This is a transient error, retry after a delay
+                    retry_count += 1
+                    print(f"Transient error, retrying in {retry_count} seconds...")
+                    time.sleep(retry_count)  # Exponential backoff
                 else:
-                    raw_results = [raw_results]
-            else:
-                raw_results = [raw_results]
+                    # Non-transient error or max retries reached
+                    break
 
-        return self._format_search_results(raw_results)
+        # If we get here, all retries failed
+        error_message = str(last_error) if last_error else "Unknown search error"
+        print(f"Search failed after {max_retries} attempts: {error_message}")
+
+        # Return a helpful error message as a search result
+        return [SearchResult(
+            title="Search Error",
+            url="",
+            snippet=f"Error performing search: {error_message}. Please try again later."
+        )]
 
     def __call__(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -241,8 +298,19 @@ class SearchAgent:
             # Extract the query from the last message
             query = state["messages"][-1]["content"]
 
-            # Perform search
+            # Check if we have a subtask in the state (used by MCP)
+            if "current_subtask" in state and state["current_subtask"]:
+                subtask = state["current_subtask"]
+                if "description" in subtask:
+                    # Use the subtask description as the query
+                    query = subtask["description"]
+                    print(f"Using subtask description as query: {query}")
+
+            # Perform search with retries
             search_results = self.search(query)
+
+            # Check if we got an error result
+            has_error = any("Error" in result.title for result in search_results)
 
             # Format results for display
             formatted_results = "\n\n".join([
@@ -267,30 +335,54 @@ class SearchAgent:
                 content = str(response)
 
             # Update state
-            state["agent_outputs"]["search"] = {
+            state["agent_outputs"]["search_agent"] = {
                 "results": [
                     result.model_dump() if hasattr(result, "model_dump")
                     else vars(result) if hasattr(result, "__dict__")
                     else {"title": str(result), "url": "", "snippet": str(result)}
                     for result in search_results
-                ]
+                ],
+                "has_error": has_error
             }
+
+            # Add error information if there was an error
+            if has_error:
+                error_results = [r for r in search_results if "Error" in r.title]
+                if error_results:
+                    state["agent_outputs"]["search_agent"]["error"] = error_results[0].snippet
+
+                    # If this is a subtask in MCP, mark it for potential fallback
+                    if "current_subtask" in state:
+                        state["agent_outputs"]["search_agent"]["needs_fallback"] = True
+
             state["messages"].append({"role": "assistant", "content": content})
+
         except Exception as e:
             # Handle errors gracefully
             error_message = f"Search agent encountered an error: {str(e)}"
             print(error_message)
 
+            # Get detailed error information
+            import traceback
+            trace = traceback.format_exc()
+            print(f"Detailed error: {trace}")
+
             # Update state with error information
-            state["agent_outputs"]["search"] = {
+            state["agent_outputs"]["search_agent"] = {
                 "error": str(e),
-                "results": []
+                "traceback": trace,
+                "results": [],
+                "has_error": True
             }
+
+            # If this is a subtask in MCP, mark it for potential fallback
+            if "current_subtask" in state:
+                state["agent_outputs"]["search_agent"]["needs_fallback"] = True
 
             # Add error response to messages
             state["messages"].append({
                 "role": "assistant",
-                "content": f"I apologize, but I encountered an error while searching: {str(e)}"
+                "content": f"I apologize, but I encountered an error while searching: {str(e)}. Please try again or consider using a different search provider."
             })
 
         return state

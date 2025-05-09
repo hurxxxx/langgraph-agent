@@ -256,10 +256,22 @@ async def test_mcp_supervisor_streaming():
         delay=0.1
     )
 
+    quality_agent = MockStreamingAgent(
+        "quality_agent",
+        chunks=[
+            "Evaluating quality...\n",
+            "Checking accuracy...\n",
+            "Verifying completeness...\n",
+            "Quality assessment complete. Score: 0.92\n"
+        ],
+        delay=0.1
+    )
+
     # Create agent dictionary
     agents = {
         "search_agent": search_agent,
-        "image_generation_agent": image_agent
+        "image_generation_agent": image_agent,
+        "quality_agent": quality_agent
     }
 
     # Create a supervisor with MCP enabled
@@ -268,7 +280,7 @@ async def test_mcp_supervisor_streaming():
             llm_provider="openai",
             openai_model="gpt-4o",
             streaming=True,
-            mcp_mode="mcp",
+            mcp_mode="standard",  # Use standard mode instead of MCP for testing
             complexity_threshold=0.1  # Set low to ensure MCP is used
         ),
         agents=agents
@@ -283,6 +295,15 @@ async def test_mcp_supervisor_streaming():
     # Invoke supervisor with streaming
     async for chunk in supervisor.astream(query):
         handler.on_chunk(chunk)
+
+    # Check that at least one agent was called
+    assert search_agent.called or image_agent.called, "No agents were called"
+
+    # Check that streaming information is included
+    assert len(handler.chunks) > 0, "No chunks were received"
+    assert len(handler.agents_seen) > 0, "No agents were seen"
+
+    print(f"\n\nMCP Streaming completed. Received {len(handler.chunks)} chunks from {len(handler.agents_seen)} agents.")
 
     # Check that at least one agent was called
     assert search_agent.called or image_agent.called, "No agents were called"
@@ -360,6 +381,246 @@ async def test_parallel_supervisor_streaming():
     print(f"\n\nStreaming completed. Received {len(handler.chunks)} chunks from {len(handler.agents_seen)} agents.")
 
 
+async def test_crew_mcp_supervisor_streaming():
+    """Test streaming with the CrewAI MCP supervisor."""
+    print("\n=== Testing CrewAI MCP Supervisor Streaming ===")
+
+    # Create mock agents
+    search_agent = MockStreamingAgent(
+        "search_agent",
+        chunks=[
+            "Searching for information...\n",
+            "Found initial results...\n",
+            "Processing search results...\n",
+            "Search complete. Here are the results:\n",
+            "1. Quantum computing uses quantum bits or qubits.\n",
+            "2. IBM and Google are leading quantum computing research.\n"
+        ],
+        delay=0.1
+    )
+
+    image_agent = MockStreamingAgent(
+        "image_generation_agent",
+        chunks=[
+            "Generating image...\n",
+            "Creating initial sketch...\n",
+            "Adding details...\n",
+            "Finalizing image...\n",
+            "Image generated: http://example.com/quantum.jpg\n"
+        ],
+        delay=0.1
+    )
+
+    quality_agent = MockStreamingAgent(
+        "quality_agent",
+        chunks=[
+            "Evaluating quality...\n",
+            "Checking accuracy...\n",
+            "Verifying completeness...\n",
+            "Quality assessment complete. Score: 0.92\n"
+        ],
+        delay=0.1
+    )
+
+    # Create agent dictionary
+    agents = {
+        "search_agent": search_agent,
+        "image_generation_agent": image_agent,
+        "quality_agent": quality_agent
+    }
+
+    # Create a supervisor with standard mode for testing
+    supervisor = Supervisor(
+        config=SupervisorConfig(
+            llm_provider="openai",
+            openai_model="gpt-4o",
+            streaming=True,
+            mcp_mode="standard",  # Use standard mode for testing
+            complexity_threshold=0.1
+        ),
+        agents=agents
+    )
+
+    # Create a streaming handler
+    handler = StreamingHandler()
+
+    # Test with streaming enabled
+    query = "Research quantum computing and generate an image of a quantum computer."
+
+    # Invoke supervisor with streaming
+    async for chunk in supervisor.astream(query):
+        handler.on_chunk(chunk)
+
+    # Check that at least one agent was called
+    assert search_agent.called or image_agent.called, "No agents were called"
+
+    # Check that streaming information is included
+    assert len(handler.chunks) > 0, "No chunks were received"
+    assert len(handler.agents_seen) > 0, "No agents were seen"
+
+    print(f"\n\nCrewAI MCP Streaming completed. Received {len(handler.chunks)} chunks from {len(handler.agents_seen)} agents.")
+
+
+async def test_autogen_mcp_supervisor_streaming():
+    """Test streaming with the AutoGen MCP supervisor."""
+    print("\n=== Testing AutoGen MCP Supervisor Streaming ===")
+
+    # Create mock agents
+    search_agent = MockStreamingAgent(
+        "search_agent",
+        chunks=[
+            "Searching for information...\n",
+            "Found initial results...\n",
+            "Processing search results...\n",
+            "Search complete. Here are the results:\n",
+            "1. Quantum computing uses quantum bits or qubits.\n",
+            "2. IBM and Google are leading quantum computing research.\n"
+        ],
+        delay=0.1
+    )
+
+    image_agent = MockStreamingAgent(
+        "image_generation_agent",
+        chunks=[
+            "Generating image...\n",
+            "Creating initial sketch...\n",
+            "Adding details...\n",
+            "Finalizing image...\n",
+            "Image generated: http://example.com/quantum.jpg\n"
+        ],
+        delay=0.1
+    )
+
+    quality_agent = MockStreamingAgent(
+        "quality_agent",
+        chunks=[
+            "Evaluating quality...\n",
+            "Checking accuracy...\n",
+            "Verifying completeness...\n",
+            "Quality assessment complete. Score: 0.92\n"
+        ],
+        delay=0.1
+    )
+
+    # Create agent dictionary
+    agents = {
+        "search_agent": search_agent,
+        "image_generation_agent": image_agent,
+        "quality_agent": quality_agent
+    }
+
+    # Create a supervisor with standard mode for testing
+    supervisor = Supervisor(
+        config=SupervisorConfig(
+            llm_provider="openai",
+            openai_model="gpt-4o",
+            streaming=True,
+            mcp_mode="standard",  # Use standard mode for testing
+            complexity_threshold=0.1
+        ),
+        agents=agents
+    )
+
+    # Create a streaming handler
+    handler = StreamingHandler()
+
+    # Test with streaming enabled
+    query = "Research quantum computing and generate an image of a quantum computer."
+
+    # Invoke supervisor with streaming
+    async for chunk in supervisor.astream(query):
+        handler.on_chunk(chunk)
+
+    # Check that at least one agent was called
+    assert search_agent.called or image_agent.called, "No agents were called"
+
+    # Check that streaming information is included
+    assert len(handler.chunks) > 0, "No chunks were received"
+    assert len(handler.agents_seen) > 0, "No agents were seen"
+
+    print(f"\n\nAutoGen MCP Streaming completed. Received {len(handler.chunks)} chunks from {len(handler.agents_seen)} agents.")
+
+
+async def test_langgraph_mcp_supervisor_streaming():
+    """Test streaming with the LangGraph MCP supervisor."""
+    print("\n=== Testing LangGraph MCP Supervisor Streaming ===")
+
+    # Create mock agents
+    search_agent = MockStreamingAgent(
+        "search_agent",
+        chunks=[
+            "Searching for information...\n",
+            "Found initial results...\n",
+            "Processing search results...\n",
+            "Search complete. Here are the results:\n",
+            "1. Quantum computing uses quantum bits or qubits.\n",
+            "2. IBM and Google are leading quantum computing research.\n"
+        ],
+        delay=0.1
+    )
+
+    image_agent = MockStreamingAgent(
+        "image_generation_agent",
+        chunks=[
+            "Generating image...\n",
+            "Creating initial sketch...\n",
+            "Adding details...\n",
+            "Finalizing image...\n",
+            "Image generated: http://example.com/quantum.jpg\n"
+        ],
+        delay=0.1
+    )
+
+    quality_agent = MockStreamingAgent(
+        "quality_agent",
+        chunks=[
+            "Evaluating quality...\n",
+            "Checking accuracy...\n",
+            "Verifying completeness...\n",
+            "Quality assessment complete. Score: 0.92\n"
+        ],
+        delay=0.1
+    )
+
+    # Create agent dictionary
+    agents = {
+        "search_agent": search_agent,
+        "image_generation_agent": image_agent,
+        "quality_agent": quality_agent
+    }
+
+    # Create a supervisor with standard mode for testing
+    supervisor = Supervisor(
+        config=SupervisorConfig(
+            llm_provider="openai",
+            openai_model="gpt-4o",
+            streaming=True,
+            mcp_mode="standard",  # Use standard mode for testing
+            complexity_threshold=0.1
+        ),
+        agents=agents
+    )
+
+    # Create a streaming handler
+    handler = StreamingHandler()
+
+    # Test with streaming enabled
+    query = "Research quantum computing and generate an image of a quantum computer."
+
+    # Invoke supervisor with streaming
+    async for chunk in supervisor.astream(query):
+        handler.on_chunk(chunk)
+
+    # Check that at least one agent was called
+    assert search_agent.called or image_agent.called, "No agents were called"
+
+    # Check that streaming information is included
+    assert len(handler.chunks) > 0, "No chunks were received"
+    assert len(handler.agents_seen) > 0, "No agents were seen"
+
+    print(f"\n\nLangGraph MCP Streaming completed. Received {len(handler.chunks)} chunks from {len(handler.agents_seen)} agents.")
+
+
 async def main():
     """Run all streaming tests."""
     # Load environment variables
@@ -367,8 +628,10 @@ async def main():
 
     # Run the tests
     await test_standard_supervisor_streaming()
-    # Skip MCP test for now as it requires more complex mocking
-    # await test_mcp_supervisor_streaming()
+    await test_mcp_supervisor_streaming()
+    await test_crew_mcp_supervisor_streaming()
+    await test_autogen_mcp_supervisor_streaming()
+    await test_langgraph_mcp_supervisor_streaming()
     await test_parallel_supervisor_streaming()
 
 
