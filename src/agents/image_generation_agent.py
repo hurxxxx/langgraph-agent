@@ -1,565 +1,202 @@
 """
-Image Generation Agent for Multi-Agent System
+Image Generation Agent using LangGraph's create_react_agent
 
-This module implements an image generation agent that can create images using:
-- DALL-E 3
-- GPT-4o image generation capabilities
-- Other image generation services
-
-The agent supports different image generation providers and can be configured
-to use different models and parameters. It also supports saving generated images
-to local storage for verification and future use.
+This module implements an image generation agent using LangGraph's create_react_agent function
+and OpenAI's DALL-E image generation capabilities.
 """
 
 import os
-import base64
-import requests
 import json
+import uuid
 import time
-from typing import Dict, List, Any, Optional, Literal, Union
+import hashlib
+from typing import Dict, List, Any, Optional, Literal
+from datetime import datetime
 from pydantic import BaseModel, Field
-from pathlib import Path
 
-# Import utility functions
-# Import utility functions
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+# LangChain components
+from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
-from src.utils.file_operations import (
-    ensure_directory_exists,
-    download_file,
-    save_metadata,
-    load_metadata,
-    generate_unique_filename,
-    verify_file_exists,
-    get_file_size,
-    get_file_extension
-)
+# Image generation tools
+from langchain_community.utilities.dalle_image_generator import DallEAPIWrapper
+from langchain_community.tools.openai_dalle_image_generation import OpenAIDALLEImageGenerationTool
 
-# Import LangChain components
-try:
-    from langchain_openai import ChatOpenAI
-    from langchain_core.messages import HumanMessage, SystemMessage
-    from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-except ImportError:
-    print("Warning: LangChain components not available. Using mock implementations.")
-    # Mock implementations for testing
-    class ChatOpenAI:
-        def __init__(self, model=None, temperature=0, streaming=False):
-            self.model = model
-            self.temperature = temperature
-            self.streaming = streaming
-
-        def invoke(self, messages):
-            return {"content": f"Response from {self.model} about {messages[-1]['content']}"}
-
-    class HumanMessage:
-        def __init__(self, content):
-            self.content = content
-
-    class SystemMessage:
-        def __init__(self, content):
-            self.content = content
-
-    class MessagesPlaceholder:
-        def __init__(self, variable_name):
-            self.variable_name = variable_name
-
-    class ChatPromptTemplate:
-        @classmethod
-        def from_messages(cls, messages):
-            return cls()
-
-        def format(self, **kwargs):
-            return kwargs
-
-
-class ImageGenerationResult(BaseModel):
-    """Model for an image generation result."""
-    image_url: str
-    prompt: str
-    model: str
-    size: str
-    local_path: Optional[str] = None
-    file_size: Optional[int] = None
-    created_at: Optional[float] = None
-    metadata_path: Optional[str] = None
-    verified: bool = False
+# LangGraph components
+from langgraph.prebuilt import create_react_agent
+from langgraph.graph import END, StateGraph
 
 
 class ImageGenerationAgentConfig(BaseModel):
-    """Configuration for the image generation agent."""
-    provider: Literal["dalle", "gpt4o", "gpt-image"] = "gpt-image"
-    dalle_model: str = "dall-e-3"
-    gpt4o_model: str = "gpt-4o"
-    gpt_image_model: str = "gpt-image-1"
+    """
+    Configuration for the image generation agent.
+    """
+    # LLM configuration
+    llm_provider: Literal["openai", "anthropic"] = "openai"
+    openai_model: str = "gpt-4o"
+    anthropic_model: str = "claude-3-7-sonnet-20250219"
     temperature: float = 0
     streaming: bool = True
+
+    # Image generation configuration
+    provider: Literal["dalle", "gpt-image"] = "gpt-image"
+    dalle_model: str = "dall-e-3"
+    gpt_image_model: str = "gpt-image-1"
     image_size: str = "1024x1024"
-    image_quality: str = "high"
+    image_quality: Literal["standard", "high"] = "standard"
+    image_style: Optional[str] = None
+
     # File storage configuration
     save_images: bool = True
     images_dir: str = "./generated_images"
     metadata_dir: str = "./generated_images/metadata"
-    verify_downloads: bool = True
-    download_timeout: int = 30
-    system_message: str = """
-    You are an image generation agent that creates images based on descriptions.
-    Your job is to:
-    1. Understand the image description
-    2. Generate an appropriate image
-    3. Provide the image URL and any relevant details
-    4. Save the image locally for verification and future use
 
-    Always confirm what image was generated and provide both the image URL and local file path.
+    # System messages
+    system_message: str = """
+    You are an image generation agent that creates high-quality images based on user descriptions.
+
+    Your job is to:
+    1. Analyze the user's image request carefully
+    2. Refine the description to create a detailed, clear prompt for the image generation model
+    3. Generate an image that matches the user's requirements
+    4. Provide the image URL and a brief description of what was generated
+
+    For Ghibli-style images, incorporate elements like:
+    - Soft, painterly art style with attention to natural details
+    - Vibrant but not overly saturated colors
+    - Whimsical, fantastical elements blended with realistic settings
+    - Attention to lighting, atmosphere, and environmental details
+
+    Always ensure the image is appropriate and follows content guidelines.
     """
 
 
 class ImageGenerationAgent:
     """
-    Image generation agent that creates images using various providers.
+    Image generation agent using LangGraph's create_react_agent function.
+    Supports DALL-E and GPT-4 Vision for image generation.
     """
 
-    def __init__(self, config: ImageGenerationAgentConfig = ImageGenerationAgentConfig()):
+    def __init__(self, config=None):
         """
         Initialize the image generation agent.
 
         Args:
             config: Configuration for the image generation agent
         """
-        self.config = config
+        # Initialize configuration
+        self.config = config or ImageGenerationAgentConfig()
 
-        # Initialize LLM
-        try:
-            self.llm = ChatOpenAI(
-                model=config.gpt4o_model if config.provider == "gpt4o" else "gpt-4o",
-                temperature=config.temperature,
-                streaming=config.streaming
-            )
-        except Exception as e:
-            print(f"Warning: Could not initialize ChatOpenAI: {str(e)}")
-            # Use a mock implementation
-            class MockLLM:
-                def invoke(self, messages):
-                    return {"content": f"Mock response about image generation"}
-            self.llm = MockLLM()
-
-        # Initialize image generator for DALL-E
-        # We'll use a mock implementation for now
-        self.image_generator = None
-
-        # Create prompt template
-        self.prompt = ChatPromptTemplate.from_messages([
-            SystemMessage(content=config.system_message),
-            MessagesPlaceholder(variable_name="messages"),
-            SystemMessage(content="Image generation results: {generation_results}")
-        ])
-
-        # Ensure image and metadata directories exist
+        # Create directories if they don't exist
         if self.config.save_images:
-            self.images_dir = ensure_directory_exists(self.config.images_dir)
-            self.metadata_dir = ensure_directory_exists(self.config.metadata_dir)
-            print(f"Image generation agent initialized with image directory: {self.images_dir}")
-            print(f"Image generation agent initialized with metadata directory: {self.metadata_dir}")
+            os.makedirs(self.config.images_dir, exist_ok=True)
+            os.makedirs(self.config.metadata_dir, exist_ok=True)
 
-    def _extract_image_description(self, message: str) -> str:
-        """
-        Extract the image description from the message.
-
-        Args:
-            message: User message
-
-        Returns:
-            str: Extracted image description
-        """
-        # This is a simplified implementation
-        # In a real system, you would use the LLM to extract the description
-
-        # Look for common patterns
-        if "generate an image of" in message.lower():
-            return message.lower().split("generate an image of")[1].strip()
-        elif "create an image of" in message.lower():
-            return message.lower().split("create an image of")[1].strip()
-        elif "image:" in message.lower():
-            return message.lower().split("image:")[1].strip()
-        else:
-            # If no pattern is found, use the whole message
-            return message
-
-    def _save_image_locally(self, image_url: str, prompt: str, model: str, size: str, max_retries: int = 3) -> Dict[str, Any]:
-        """
-        Save an image from a URL to local storage with retry logic.
-
-        Args:
-            image_url: URL of the image
-            prompt: Image generation prompt
-            model: Model used to generate the image
-            size: Size of the generated image
-            max_retries: Maximum number of retries for transient errors
-
-        Returns:
-            Dict[str, Any]: Information about the saved image
-        """
-        if not self.config.save_images:
-            return {
-                "local_path": None,
-                "file_size": None,
-                "created_at": time.time(),
-                "metadata_path": None,
-                "verified": False
-            }
-
-        retry_count = 0
-        last_error = None
-
-        while retry_count < max_retries:
-            try:
-                # Generate a unique filename
-                extension = get_file_extension(image_url)
-                local_path = generate_unique_filename(
-                    self.images_dir,
-                    prefix=f"{model.replace('-', '_')}",
-                    extension=extension
-                )
-
-                # Download the image with timeout
-                print(f"Downloading image from {image_url} to {local_path} (attempt {retry_count + 1}/{max_retries})")
-                download_file(image_url, local_path, timeout=self.config.download_timeout)
-
-                # Verify the file exists and get its size
-                if verify_file_exists(local_path):
-                    file_size = get_file_size(local_path)
-
-                    # Additional verification: check if file size is reasonable (not empty or too small)
-                    if file_size < 100:  # Less than 100 bytes is suspicious for an image
-                        print(f"Warning: Downloaded file is very small ({file_size} bytes), might be corrupted")
-                        if retry_count < max_retries - 1:
-                            retry_count += 1
-                            print(f"Retrying download in {retry_count} seconds...")
-                            time.sleep(retry_count)
-                            continue
-
-                    verified = True
-                else:
-                    # File doesn't exist after download attempt
-                    if retry_count < max_retries - 1:
-                        retry_count += 1
-                        print(f"Download failed, retrying in {retry_count} seconds...")
-                        time.sleep(retry_count)
-                        continue
-
-                    file_size = 0
-                    verified = False
-
-                # Create metadata
-                created_at = time.time()
-                metadata = {
-                    "prompt": prompt,
-                    "model": model,
-                    "size": size,
-                    "image_url": image_url,
-                    "local_path": local_path,
-                    "file_size": file_size,
-                    "created_at": created_at,
-                    "verified": verified
-                }
-
-                # Save metadata
-                metadata_path = os.path.join(
-                    self.metadata_dir,
-                    f"{os.path.basename(local_path).split('.')[0]}.json"
-                )
-                save_metadata(metadata, metadata_path)
-
-                return {
-                    "local_path": local_path,
-                    "file_size": file_size,
-                    "created_at": created_at,
-                    "metadata_path": metadata_path,
-                    "verified": verified
-                }
-
-            except requests.exceptions.Timeout:
-                last_error = "Request timed out"
-                print(f"Timeout downloading image (attempt {retry_count + 1}/{max_retries})")
-
-                if retry_count < max_retries - 1:
-                    retry_count += 1
-                    print(f"Retrying in {retry_count} seconds...")
-                    time.sleep(retry_count)
-                else:
-                    break
-
-            except requests.exceptions.ConnectionError:
-                last_error = "Connection error"
-                print(f"Connection error downloading image (attempt {retry_count + 1}/{max_retries})")
-
-                if retry_count < max_retries - 1:
-                    retry_count += 1
-                    print(f"Retrying in {retry_count} seconds...")
-                    time.sleep(retry_count)
-                else:
-                    break
-
-            except Exception as e:
-                last_error = str(e)
-                print(f"Error saving image locally (attempt {retry_count + 1}/{max_retries}): {str(e)}")
-
-                # Check if it's a transient error
-                error_str = str(e).lower()
-                is_transient = any(term in error_str for term in [
-                    "timeout", "connection", "network", "temporary",
-                    "rate limit", "too many requests", "503", "502"
-                ])
-
-                if is_transient and retry_count < max_retries - 1:
-                    retry_count += 1
-                    print(f"Transient error, retrying in {retry_count} seconds...")
-                    time.sleep(retry_count)
-                else:
-                    break
-
-        # If we get here, all retries failed
-        error_message = last_error if last_error else "Unknown error saving image"
-        print(f"Failed to save image after {max_retries} attempts: {error_message}")
-
-        return {
-            "local_path": None,
-            "file_size": None,
-            "created_at": time.time(),
-            "metadata_path": None,
-            "verified": False,
-            "error": error_message
-        }
-
-    def generate_image_dalle(self, prompt: str) -> ImageGenerationResult:
-        """
-        Generate an image using DALL-E.
-
-        Args:
-            prompt: Image description
-
-        Returns:
-            ImageGenerationResult: Generated image details
-        """
-        try:
-            # Call the OpenAI API to generate an image
-            from openai import OpenAI
-            client = OpenAI()
-
-            # Add Ghibli style to the prompt if not already present
-            if "ghibli" in prompt.lower() or "studio ghibli" in prompt.lower():
-                styled_prompt = prompt
-            else:
-                styled_prompt = f"{prompt}, in the style of Studio Ghibli"
-
-            print(f"Using prompt for DALL-E: {styled_prompt}")
-
-            response = client.images.generate(
-                model=self.config.dalle_model,
-                prompt=styled_prompt,
-                n=1,
-                size=self.config.image_size,
-                quality="hd" if self.config.image_quality == "high" else "standard",
-                style="vivid"
+        # Initialize LLM based on provider
+        if self.config.llm_provider == "openai":
+            self.llm = ChatOpenAI(
+                model=self.config.openai_model,
+                temperature=self.config.temperature,
+                streaming=self.config.streaming
+            )
+        else:  # anthropic
+            self.llm = ChatAnthropic(
+                model=self.config.anthropic_model,
+                temperature=self.config.temperature,
+                streaming=self.config.streaming
             )
 
-            # Get the image URL from the response
-            image_url = response.data[0].url
+        # Initialize image generation tool
+        self.image_tool = self._initialize_image_tool()
 
-            # Create the result
-            result = ImageGenerationResult(
-                image_url=image_url,
-                prompt=styled_prompt,
-                model=self.config.dalle_model,
-                size=self.config.image_size
-            )
-
-            # Save the image locally if configured
-            if self.config.save_images:
-                save_result = self._save_image_locally(
-                    image_url=image_url,
-                    prompt=styled_prompt,
-                    model=self.config.dalle_model,
-                    size=self.config.image_size
-                )
-
-                # Update the result with local file information
-                result.local_path = save_result.get("local_path")
-                result.file_size = save_result.get("file_size")
-                result.created_at = save_result.get("created_at")
-                result.metadata_path = save_result.get("metadata_path")
-                result.verified = save_result.get("verified", False)
-
-            return result
-
-        except Exception as e:
-            print(f"Error generating image with DALL-E: {str(e)}")
-            # Fallback to mock implementation for testing
-            image_url = "https://example.com/generated_image.png"
-
-            # Create the basic result
-            result = ImageGenerationResult(
-                image_url=image_url,
-                prompt=prompt,
-                model=self.config.dalle_model,
-                size=self.config.image_size
-            )
-
-            return result
-
-    def generate_image_gpt4o(self, prompt: str) -> ImageGenerationResult:
-        """
-        Generate an image using GPT-4o's image generation capabilities.
-
-        Args:
-            prompt: Image description
-
-        Returns:
-            ImageGenerationResult: Generated image details
-        """
-        # Note: This is a placeholder implementation since GPT-4o's image generation
-        # API might not be fully documented or available at the time of writing
-
-        response = self.llm.invoke([
-            SystemMessage(content="You are an image generation assistant. Generate images based on user prompts."),
-            HumanMessage(content=f"Generate an image of: {prompt}")
-        ])
-
-        # This is a placeholder - in a real implementation, you would extract the image URL
-        # from the response based on the actual API
-        image_url = "https://example.com/generated_image.png"
-
-        # Create the basic result
-        result = ImageGenerationResult(
-            image_url=image_url,
-            prompt=prompt,
-            model=self.config.gpt4o_model,
-            size=self.config.image_size
+        # Create ReAct agent with system message
+        self.agent = create_react_agent(
+            self.llm,
+            [self.image_tool],
+            prompt=SystemMessage(content=self.config.system_message)
         )
 
-        # Save the image locally if configured
-        if self.config.save_images:
-            save_result = self._save_image_locally(
-                image_url=image_url,
-                prompt=prompt,
-                model=self.config.gpt4o_model,
-                size=self.config.image_size
-            )
+        # Create agent graph
+        AgentState = self._get_graph_state_schema()
+        self.graph = StateGraph(AgentState)
+        self.graph.add_node("agent", self.agent)
+        self.graph.set_entry_point("agent")
+        self.graph.add_edge("agent", END)
+        self.compiled_graph = self.graph.compile()
 
-            # Update the result with local file information
-            result.local_path = save_result.get("local_path")
-            result.file_size = save_result.get("file_size")
-            result.created_at = save_result.get("created_at")
-            result.metadata_path = save_result.get("metadata_path")
-            result.verified = save_result.get("verified", False)
-
-        return result
-
-    def generate_image_gpt_image(self, prompt: str) -> ImageGenerationResult:
+    def _initialize_image_tool(self):
         """
-        Generate an image using OpenAI's GPT-Image-1 model.
-        Falls back to DALL-E 3 if organization verification is required.
-
-        Args:
-            prompt: Image description
+        Initialize the image generation tool based on the provider.
 
         Returns:
-            ImageGenerationResult: Generated image details
+            Tool: Initialized image generation tool
         """
-        try:
-            # Call the OpenAI API to generate an image
-            from openai import OpenAI
-            client = OpenAI()
+        # Configure DALL-E API wrapper
+        dalle_wrapper = DallEAPIWrapper(
+            model=self.config.dalle_model if self.config.provider == "dalle" else self.config.gpt_image_model,
+            size=self.config.image_size,
+            quality=self.config.image_quality,
+            style=self.config.image_style
+        )
 
-            # Add Ghibli style to the prompt
-            if "ghibli" in prompt.lower() or "studio ghibli" in prompt.lower():
-                styled_prompt = prompt
-            else:
-                styled_prompt = f"{prompt}, in the style of Studio Ghibli"
+        # Create DALL-E tool
+        return OpenAIDALLEImageGenerationTool(api_wrapper=dalle_wrapper)
 
-            print(f"Using prompt for GPT-Image-1: {styled_prompt}")
-
-            response = client.images.generate(
-                model=self.config.gpt_image_model,
-                prompt=styled_prompt,
-                n=1,
-                size=self.config.image_size,
-                quality=self.config.image_quality,
-                output_format="png",
-                background="auto",
-                moderation="auto"
-            )
-
-            # Get the image URL from the response
-            image_url = response.data[0].url
-
-            # Create the result
-            result = ImageGenerationResult(
-                image_url=image_url,
-                prompt=styled_prompt,
-                model=self.config.gpt_image_model,
-                size=self.config.image_size
-            )
-
-            # Save the image locally if configured
-            if self.config.save_images:
-                save_result = self._save_image_locally(
-                    image_url=image_url,
-                    prompt=styled_prompt,
-                    model=self.config.gpt_image_model,
-                    size=self.config.image_size
-                )
-
-                # Update the result with local file information
-                result.local_path = save_result.get("local_path")
-                result.file_size = save_result.get("file_size")
-                result.created_at = save_result.get("created_at")
-                result.metadata_path = save_result.get("metadata_path")
-                result.verified = save_result.get("verified", False)
-
-            return result
-
-        except Exception as e:
-            print(f"Error generating image with GPT-Image-1: {str(e)}")
-            print("Falling back to DALL-E 3 model...")
-
-            # Fallback to DALL-E 3 if organization verification is required
-            if "organization must be verified" in str(e):
-                return self.generate_image_dalle(prompt + ", in the style of Studio Ghibli")
-
-            # Fallback to mock implementation for other errors
-            image_url = "https://example.com/generated_image.png"
-
-            # Create the basic result
-            result = ImageGenerationResult(
-                image_url=image_url,
-                prompt=prompt,
-                model=self.config.gpt_image_model,
-                size=self.config.image_size
-            )
-
-            return result
-
-    def generate_image(self, prompt: str) -> ImageGenerationResult:
+    def _get_graph_state_schema(self):
         """
-        Generate an image using the configured provider.
-
-        Args:
-            prompt: Image description
+        Get the state schema for the agent graph.
 
         Returns:
-            ImageGenerationResult: Generated image details
+            TypedDict: State schema class
         """
-        if self.config.provider == "dalle":
-            return self.generate_image_dalle(prompt)
-        elif self.config.provider == "gpt4o":
-            return self.generate_image_gpt4o(prompt)
-        elif self.config.provider == "gpt-image":
-            return self.generate_image_gpt_image(prompt)
-        else:
-            raise ValueError(f"Unsupported image generation provider: {self.config.provider}")
+        from typing import Annotated
+        from typing_extensions import TypedDict
+        from langgraph.graph.message import add_messages
+
+        class AgentState(TypedDict):
+            messages: Annotated[list, add_messages]
+            agent_outcome: Optional[Dict[str, Any]]
+
+        return AgentState
+
+    def _save_image_metadata(self, prompt: str, image_url: str, file_path: str):
+        """
+        Save metadata for the generated image.
+
+        Args:
+            prompt: The prompt used to generate the image
+            image_url: URL of the generated image
+            file_path: Path where the image is saved
+
+        Returns:
+            str: Path to the metadata file
+        """
+        if not self.config.save_images:
+            return None
+
+        # Create a unique ID for the image
+        image_id = str(uuid.uuid4())
+
+        # Create metadata
+        metadata = {
+            "id": image_id,
+            "timestamp": datetime.now().isoformat(),
+            "prompt": prompt,
+            "model": self.config.dalle_model if self.config.provider == "dalle" else self.config.gpt_image_model,
+            "size": self.config.image_size,
+            "quality": self.config.image_quality,
+            "style": self.config.image_style,
+            "image_url": image_url,
+            "file_path": file_path
+        }
+
+        # Save metadata to file
+        metadata_path = os.path.join(self.config.metadata_dir, f"{image_id}.json")
+        with open(metadata_path, "w") as f:
+            json.dump(metadata, f, indent=2)
+
+        return metadata_path
 
     def __call__(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -572,131 +209,60 @@ class ImageGenerationAgent:
             Dict[str, Any]: Updated state
         """
         try:
-            # Extract the message from the last message
-            message = state["messages"][-1]["content"]
+            # Extract the prompt from the last message
+            if "messages" in state and isinstance(state["messages"], list) and state["messages"]:
+                if isinstance(state["messages"][-1], dict) and "content" in state["messages"][-1]:
+                    prompt = state["messages"][-1]["content"]
+                else:
+                    prompt = str(state["messages"][-1])
+            else:
+                prompt = state.get("query", "")
 
             # Check if we have a subtask in the state (used by MCP)
             if "current_subtask" in state and state["current_subtask"]:
                 subtask = state["current_subtask"]
                 if "description" in subtask:
-                    # Use the subtask description as the message
-                    message = subtask["description"]
-                    print(f"Using subtask description for image generation: {message}")
+                    # Use the subtask description as the prompt
+                    prompt = subtask["description"]
 
-            # Extract the image description
-            image_description = self._extract_image_description(message)
+            # Create input for the agent
+            agent_input = {"messages": [{"role": "user", "content": prompt}]}
 
-            # Check if we have a valid image description
-            if not image_description or len(image_description.strip()) < 5:
-                # If the description is too short or empty, try to use the full message
-                print(f"Image description too short: '{image_description}', using full message")
-                image_description = message
+            # Run the agent
+            result = self.compiled_graph.invoke(agent_input)
 
-            # Generate the image
-            try:
-                result = self.generate_image(image_description)
+            # Update the state with the agent's response
+            if "messages" in result and result["messages"]:
+                # Convert LangChain message objects to dictionaries if needed
+                processed_messages = []
+                for msg in result["messages"]:
+                    if hasattr(msg, "content") and hasattr(msg, "type"):
+                        processed_messages.append({
+                            "role": "assistant" if msg.type == "ai" else msg.type,
+                            "content": msg.content
+                        })
+                    else:
+                        processed_messages.append(msg)
 
-                # Format the result for the LLM
-                formatted_result = f"""
-                Image generated successfully!
-                Prompt: {result.prompt}
-                Model: {result.model}
-                Size: {result.size}
-                Image URL: {result.image_url}
-                """
+                state["messages"] = state.get("messages", [])[:-1] + processed_messages
 
-                # Add local file information if available
-                if result.local_path:
-                    formatted_result += f"""
-                    Local File Path: {result.local_path}
-                    File Size: {result.file_size} bytes
-                    Verified: {result.verified}
-                    """
+            # Store agent outcome in the state
+            state["agent_outputs"] = state.get("agent_outputs", {})
+            state["agent_outputs"]["image_generation_agent"] = {
+                "result": result,
+                "prompt": prompt
+            }
 
-                error = None
-                has_error = False
-
-                # Check if the image was verified successfully
-                if not result.verified and result.local_path:
-                    error = "Image was generated but could not be verified"
-                    has_error = True
-                    formatted_result += f"\nWarning: {error}"
-
-            except Exception as e:
-                formatted_result = f"Error generating image: {str(e)}"
-                error = str(e)
-                result = None
-                has_error = True
-
-                # Get detailed error information
-                import traceback
-                trace = traceback.format_exc()
-                print(f"Detailed image generation error: {trace}")
-
-            # Generate response using LLM
-            response = self.llm.invoke(
-                self.prompt.format(
-                    messages=state["messages"],
-                    generation_results=formatted_result
-                )
-            )
-
-            # Extract content from response
-            if isinstance(response, dict):
-                content = response.get("content", "No image generation results available")
-            elif hasattr(response, "content"):
-                content = response.content
-            else:
-                content = str(response)
-
-            # Update state
-            if result:
-                # Use model_dump() for Pydantic v2 compatibility
-                if hasattr(result, "model_dump"):
-                    result_dict = result.model_dump()
-                # Fallback for Pydantic v1
-                elif hasattr(result, "dict"):
-                    result_dict = result.dict()
-                # Last resort fallback
-                else:
-                    result_dict = vars(result) if hasattr(result, "__dict__") else {"error": "Could not serialize result"}
-
-                state["agent_outputs"]["image_generation_agent"] = result_dict
-
-                # Add error information if verification failed
-                if has_error:
-                    state["agent_outputs"]["image_generation_agent"]["error"] = error
-                    state["agent_outputs"]["image_generation_agent"]["has_error"] = True
-
-                    # If this is a subtask in MCP, mark it for potential fallback
-                    if "current_subtask" in state:
-                        state["agent_outputs"]["image_generation_agent"]["needs_fallback"] = True
-            else:
-                state["agent_outputs"]["image_generation_agent"] = {
-                    "error": error,
-                    "has_error": True
-                }
-
-                # If this is a subtask in MCP, mark it for potential fallback
-                if "current_subtask" in state:
-                    state["agent_outputs"]["image_generation_agent"]["needs_fallback"] = True
-
-            state["messages"].append({"role": "assistant", "content": content})
+            return state
 
         except Exception as e:
             # Handle errors gracefully
             error_message = f"Image generation agent encountered an error: {str(e)}"
-            print(error_message)
-
-            # Get detailed error information
-            import traceback
-            trace = traceback.format_exc()
-            print(f"Detailed error: {trace}")
 
             # Update state with error information
+            state["agent_outputs"] = state.get("agent_outputs", {})
             state["agent_outputs"]["image_generation_agent"] = {
                 "error": str(e),
-                "traceback": trace,
                 "has_error": True
             }
 
@@ -705,30 +271,64 @@ class ImageGenerationAgent:
                 state["agent_outputs"]["image_generation_agent"]["needs_fallback"] = True
 
             # Add error response to messages
-            state["messages"].append({
-                "role": "assistant",
-                "content": f"I apologize, but I encountered an error while generating the image: {str(e)}. Please try again with a different description or image generation provider."
-            })
+            if "messages" in state:
+                state["messages"].append({
+                    "role": "assistant",
+                    "content": f"I apologize, but I encountered an error while generating the image: {str(e)}. Please try again with a different description."
+                })
 
-        return state
+            return state
 
+    def stream(self, state: Dict[str, Any], stream_mode: str = "values"):
+        """
+        Stream the agent's response.
 
-# Example usage
-if __name__ == "__main__":
-    # Create image generation agent
-    image_generation_agent = ImageGenerationAgent(
-        config=ImageGenerationAgentConfig(
-            provider="dalle",
-            dalle_model="dall-e-3",
-            image_size="1024x1024"
-        )
-    )
+        Args:
+            state: Current state of the system
+            stream_mode: Streaming mode ("values" or "steps")
 
-    # Test with an image generation request
-    state = {
-        "messages": [{"role": "user", "content": "Generate an image of a futuristic city with flying cars."}],
-        "agent_outputs": {}
-    }
+        Yields:
+            Dict[str, Any]: Streamed response
+        """
+        try:
+            # Extract the prompt from the last message
+            if "messages" in state and isinstance(state["messages"], list) and state["messages"]:
+                if isinstance(state["messages"][-1], dict) and "content" in state["messages"][-1]:
+                    prompt = state["messages"][-1]["content"]
+                else:
+                    prompt = str(state["messages"][-1])
+            else:
+                prompt = state.get("query", "")
 
-    updated_state = image_generation_agent(state)
-    print(updated_state["messages"][-1]["content"])
+            # Create input for the agent
+            agent_input = {"messages": [{"role": "user", "content": prompt}]}
+
+            # Stream the agent's response
+            for chunk in self.compiled_graph.stream(
+                agent_input,
+                stream_mode=stream_mode
+            ):
+                # Process the chunk to handle LangChain message objects
+                if "messages" in chunk and chunk["messages"]:
+                    processed_messages = []
+                    for msg in chunk["messages"]:
+                        if hasattr(msg, "content") and hasattr(msg, "type"):
+                            processed_messages.append({
+                                "role": "assistant" if msg.type == "ai" else msg.type,
+                                "content": msg.content
+                            })
+                        else:
+                            processed_messages.append(msg)
+
+                    chunk["messages"] = processed_messages
+
+                yield chunk
+
+        except Exception as e:
+            # Handle errors gracefully
+            yield {
+                "messages": [
+                    {"role": "user", "content": state.get("query", "")},
+                    {"role": "assistant", "content": f"I apologize, but I encountered an error while generating the image: {str(e)}. Please try again with a different description."}
+                ]
+            }

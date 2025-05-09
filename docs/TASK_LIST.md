@@ -1,254 +1,143 @@
-# Multi-Agent Supervisor System Task List
+# LangGraph Agent Task List
 
-This document tracks the development tasks for the multi-agent supervisor system using LangGraph and OpenAPI.
+이 문서는 LangGraph Agent 프로젝트의 태스크 목록을 정리합니다.
 
-## Completed Tasks
+## 1단계: 도구(Tools) 구현
 
-### Core Implementation
-- [x] Create basic project structure
-- [x] Implement supervisor agent based on LangGraph tutorial
-- [x] Add handoff tools for agent communication
-- [x] Implement task description handoff mechanism
-- [x] Add human-in-the-loop feedback mechanism
-- [x] Implement streaming support
+### 검색 도구
+- [ ] 기본 검색 도구 인터페이스 생성
+- [ ] Serper 검색 도구 구현
+- [ ] Tavily 검색 도구 구현
+- [ ] 시간 필터링 추가
+- [ ] 지역 필터링 추가
+- [ ] 뉴스 전용 필터링 추가
 
-### Agent Implementation
-- [x] Implement search agent with multiple providers
-- [x] Add Serper API integration to search agent
-- [x] Implement vector storage agent
-- [x] Implement image generation agent
-- [x] Implement quality measurement agent
+### 이미지 생성 도구
+- [ ] 기본 이미지 생성 도구 인터페이스 생성
+- [ ] DALL-E 이미지 생성 도구 구현
+- [ ] GPT-Image 생성 도구 구현
+- [ ] 이미지 저장 기능 추가
+- [ ] 메타데이터 추적 추가
 
-### API & Integration
-- [x] Create FastAPI application
-- [x] Implement streaming and non-streaming endpoints
-- [x] Add OpenAPI specifications
-- [x] Create example clients (Python, Web)
+### 벡터 저장소 도구
+- [ ] 기본 벡터 저장소 도구 인터페이스 생성
+- [ ] Chroma 벡터 저장소 도구 구현
+- [ ] PostgreSQL 벡터 저장소 도구 구현
+- [ ] 문서 청킹 기능 추가
+- [ ] 메타데이터 필터링 추가
 
-### Documentation
-- [x] Create Product Requirements Document (PRD)
-- [x] Document LangGraph latest information
-- [x] Document specialized agents
-- [x] Document OpenAPI integration
-- [x] Document streaming support
-- [x] Document Serper API integration
-- [x] Document mock implementation for development without API keys
-- [x] Create README with usage instructions
-- [x] Create task list document
+### SQL 데이터베이스 도구
+- [ ] 기본 SQL 데이터베이스 도구 인터페이스 생성
+- [ ] PostgreSQL 데이터베이스 도구 구현
+- [ ] 스키마 검사 기능 추가
+- [ ] 쿼리 검증 추가
 
-## In Progress Tasks
-- [x] Create test script for supervisor with Serper integration
-- [x] Implement mock mode for development without API keys
-- [x] Test the implementation with real API keys
-- [x] Test the implementation with real-world queries
-- [x] Test the API with curl HTTP requests
-- [x] Verify supervisor task delegation with complex prompts
-- [x] Implement sub-graph and parallel processing techniques
-- [x] Enhance supervisor to automatically identify parallelizable tasks in prompts
-- [x] Implement parallel processing for independent tasks (web search, vector search)
-- [x] Process multiple search topics in parallel when identified in a single query
-- [x] Verify library versions and update documentation
-  - [x] Check current library versions against latest available versions
-  - [x] Document library versions and best practices
-  - [x] Verify search agent implementation against latest best practices
-  - [x] Update libraries to latest versions where needed
-    - [x] Update LangChain-Core to 0.1.14
-    - [x] Update LangChain-Community to 0.0.16
-    - [x] Update FastAPI to 0.109.2
-    - [x] Update Uvicorn to 0.27.1
-    - [x] Update other minor dependencies
-- [x] Optimize agent performance and response quality
-  - [x] Implement caching mechanisms to improve response times
-  - [x] Fine-tune prompts for better agent responses
-  - [x] Add more sophisticated error handling and fallback mechanisms
-    - [x] Implement retry logic for transient errors in search agent
-    - [x] Enhance error handling in image generation agent
-    - [x] Add verification of downloaded images
-    - [x] Implement fallback mechanisms for MCP subtasks
-    - [x] Create comprehensive test suite for error handling
+### 문서 생성 도구
+- [ ] 기본 문서 생성 도구 인터페이스 생성
+- [ ] 보고서 생성 도구 구현
+- [ ] 블로그 포스트 생성 도구 구현
+- [ ] 제안서 생성 도구 구현
+- [ ] 문서 저장 기능 추가
+- [ ] 메타데이터 추적 추가
 
-## Pending Tasks
+## 2단계: 에이전트(Agents) 구현
 
-### Additional Agents
-- [x] Implement SQL RAG agent
-  - [x] Configure PostgreSQL connection (ID: postgres, PW: 102938)
-  - [x] Create complex schema structures for testing
-  - [x] Generate or import substantial sample data
-  - [x] Implement SQL query generation and execution
-  - [x] Implement RAG functionality with SQL results
-- [x] Implement vector retrieval agent
-  - [x] Configure PostgreSQL with pgvector extension
-  - [x] Create necessary database users and permissions
-  - [x] Implement vector database creation and management
-  - [x] Integrate OpenAI's embedding-small model for embeddings
-  - [x] Implement efficient vector search and retrieval
-  - [x] Add semantic similarity search capabilities
-- [x] Implement reranking agent
-  - [x] Add Cohere reranking integration
-  - [x] Add Pinecone hybrid search integration
-  - [x] Implement caching for improved performance
-  - [x] Add support for reranking search results and vector search results
-- [x] Implement document generation agents
-  - [x] Report Writer Agent for formal reports
-  - [x] Blog Writer Agent for blog posts and articles
-  - [x] Academic Writer Agent for research papers
-  - [x] Proposal Writer Agent for business proposals
-  - [x] Planning Document Agent for project plans
-    - [x] Support for Gantt charts and timelines
-    - [x] Resource allocation planning
-    - [x] Risk assessment capabilities
-    - [x] Success metrics definition
-- [x] Implement MCP agent
-  - [x] Create MCP agent class with task breakdown capabilities
-  - [x] Implement execution planning for complex tasks
-  - [x] Add integration with Supervisor for automatic complexity assessment
-  - [x] Create examples demonstrating MCP agent usage
-  - [x] Implement additional MCP architectures:
-    - [x] CrewAI-style MCP: Role-based agent teams with hierarchical structure
-    - [x] AutoGen-style MCP: Conversational multi-agent systems with dynamic agent interactions
-    - [x] LangGraph-style MCP: Graph-based workflows with conditional routing
-  - [x] Update Supervisor to support multiple MCP modes
+### 검색 에이전트
+- [ ] create_react_agent를 사용한 검색 에이전트 생성
+- [ ] 여러 검색 제공자 지원 추가
+- [ ] 시간 필터링 추가
+- [ ] 지역 필터링 추가
+- [ ] 뉴스 전용 필터링 추가
+- [ ] 스트리밍 지원 추가
 
-### Image Generation Testing
-- [x] Enhance image generation agent to save images as local files
-- [x] Implement verification mechanisms for image generation
-- [x] Create test suite for various image formats and resolutions
-- [x] Add support for image metadata and attribution
+### 이미지 생성 에이전트
+- [ ] create_react_agent를 사용한 이미지 생성 에이전트 생성
+- [ ] 여러 이미지 생성 제공자 지원 추가
+- [ ] 이미지 스타일 커스터마이징 추가
+- [ ] 이미지 저장 기능 추가
+- [ ] 스트리밍 지원 추가
 
-### Testing & Deployment
-- [x] Create unit tests for all components
-  - [x] Supervisor tests
-  - [x] MCP agent tests
-  - [x] Specialized MCP agent tests (CrewAI, AutoGen, LangGraph)
-  - [x] Search agent tests
-  - [x] Vector storage agent tests
-  - [x] API tests
-- [x] Create integration tests for the system
-  - [x] End-to-end tests
-  - [x] API integration tests
-  - [x] Agent interaction tests
-- [ ] Add monitoring and logging
-- [ ] Implement caching mechanisms for improved performance
+### 보고서 생성 에이전트
+- [ ] create_react_agent를 사용한 보고서 생성 에이전트 생성
+- [ ] 다양한 보고서 유형 지원 추가
+- [ ] 섹션 커스터마이징 추가
+- [ ] 문서 저장 기능 추가
+- [ ] 스트리밍 지원 추가
 
-### Documentation
-- [ ] Create user guide with examples
-- [ ] Document agent extension process
-- [ ] Create API reference documentation
-- [ ] Create troubleshooting guide
+### SQL 쿼리 에이전트
+- [ ] create_react_agent를 사용한 SQL 쿼리 에이전트 생성
+- [ ] 스키마 검사 기능 추가
+- [ ] 쿼리 검증 추가
+- [ ] 결과 포맷팅 추가
+- [ ] 스트리밍 지원 추가
 
-### User Interface
-- [x] Create a simple UI for testing and monitoring agent functionality
-- [x] Add visualization for agent interactions and execution flow
-- [x] Create responsive design with Bootstrap
-- [x] Implement real-time updates for streaming responses
-- [x] Add LangSmith integration for monitoring and debugging
-- [x] Implement test interface using Streamlit
-  - [x] Create UI focused on accurate testing and result verification
-  - [x] Implement test execution monitoring and progress tracking
-  - [x] Add detailed result visualization and inspection capabilities
-- [x] Implement UI testing with Playwright
-  - [x] Create integration test scenarios based on user actions
-  - [x] Automate UI testing for different test scenarios
-  - [x] Implement test result reporting and analysis
-- [x] Create quality evaluation and continuous improvement documentation
-  - [x] Document test scenarios and expected results
-  - [x] Create quality evaluation metrics and scoring system
-  - [x] Document fine-tuning strategies based on test results
-  - [x] Create process for continuous testing and improvement
-- [ ] Improve web client interface with modern framework (React/Vue.js)
-- [x] Fix issues identified during UI testing
-  - [x] Fix MCP agent error when agent_name is None in _execute_subtask method
-  - [x] Improve image generation agent provider validation and error handling
-  - [x] Enhance error handling for external API calls
-  - [x] Fix LangSmith client initialization error
-  - [x] Add more comprehensive test cases for error scenarios
+### 벡터 저장소 에이전트
+- [ ] create_react_agent를 사용한 벡터 저장소 에이전트 생성
+- [ ] 문서 저장 기능 추가
+- [ ] 문서 검색 기능 추가
+- [ ] 메타데이터 필터링 추가
+- [ ] 스트리밍 지원 추가
 
-## Current Improvement Tasks
+## 3단계: 슈퍼바이저(Supervisor) 구현
 
-### Agent Refactoring with LangGraph and LangChain
-- [ ] Refactor agents using LangGraph's create_react_agent
-  - [x] Refactor search agent to use create_react_agent
-  - [x] Refactor SQL RAG agent to use create_react_agent
-  - [x] Refactor vector storage agent to use create_react_agent
-  - [ ] Refactor image generation agent to use create_react_agent (In Progress)
-  - [ ] Refactor document generation agents to use create_react_agent
-  - [ ] Refactor MCP agent to use create_react_agent
-  - [ ] Update supervisor to work with refactored agents
+### 기본 슈퍼바이저
+- [ ] LangGraph를 사용한 슈퍼바이저 생성
+- [ ] 에이전트 선택 노드 구현
+- [ ] 에이전트 실행 노드 구현
+- [ ] 결과 처리 노드 구현
+- [ ] 합성 노드 구현
+- [ ] 스트리밍 지원 추가
 
-- [ ] Replace custom implementations with LangChain built-in tools
-  - [x] Replace custom search implementation with LangChain's TavilySearch and GoogleSerperAPIWrapper
-  - [x] Replace custom SQL RAG implementation with LangChain's SQL database tools
-  - [x] Replace custom vector storage implementation with LangChain's vector store integrations
-  - [ ] Replace custom image generation with LangChain's image generation tools (In Progress)
-  - [ ] Integrate LangChain's document loaders and text splitters
+### 병렬 슈퍼바이저
+- [ ] 병렬 실행 기능으로 기본 슈퍼바이저 확장
+- [ ] 병렬 에이전트 실행 노드 구현
+- [ ] 결과 병합 노드 구현
+- [ ] 병렬 실행을 위한 스트리밍 지원 추가
 
-- [ ] Optimize agent performance with LangGraph features
-  - [ ] Implement proper state management with TypedDict
-  - [ ] Add checkpointing for conversation persistence
-  - [ ] Implement proper error handling and recovery
-  - [ ] Add tracing with LangSmith integration
-  - [ ] Implement parallel processing with LangGraph
+## 4단계: API 및 UI 구현
 
-### Search Agent Enhancements
-- [x] Improve time reference handling in search queries
-  - [x] Add detection for Korean time references (오늘, 어제, 이번 주, etc.)
-  - [x] Add detection for English time references (today, yesterday, this week, etc.)
-  - [x] Automatically set appropriate time periods based on detected references
-  - [x] Add current date to queries with time references
-  - [x] Format dates appropriately for different search providers
-  - [x] Add year (2025) to queries to ensure recency
+### API 구현
+- [ ] FastAPI 애플리케이션 생성
+- [ ] 쿼리 엔드포인트 구현
+- [ ] 헬스 체크 엔드포인트 구현
+- [ ] 에이전트 엔드포인트 구현
+- [ ] 직접 에이전트 엔드포인트 구현
+- [ ] 스트리밍 지원 추가
 
-- [x] Enhance content quality and quantity
-  - [x] Increase default max_results for news queries
-  - [ ] Add pagination support for search results
-  - [x] Implement result merging from multiple providers
-  - [x] Improve snippet extraction from search results
-  - [x] Add support for extracting article publication dates
-  - [x] Add support for extracting article sources
+### UI 구현
+- [ ] Streamlit 애플리케이션 생성
+- [ ] 쿼리 인터페이스 구현
+- [ ] 에이전트 선택 인터페이스 구현
+- [ ] 결과 표시 구현
+- [ ] 스트리밍 지원 구현
 
-- [x] Improve search result integration
-  - [x] Enhance the format of search results
-  - [x] Add metadata extraction from search results
-  - [x] Implement result filtering based on relevance and recency
-  - [x] Implement date validation for news results
-  - [x] Add source credibility assessment
-  - [x] Implement content relevance scoring
+## 5단계: 문서화 및 테스트
 
-### Supervisor Enhancements
-- [x] Improve task complexity assessment
-  - [x] Add specific detection for news-related queries
-  - [x] Implement language-specific handling (Korean, English, etc.)
-  - [x] Add time reference detection at the supervisor level
+### 문서화
+- [ ] README.md 업데이트
+- [ ] 아키텍처 문서 생성
+- [ ] 도구 문서 생성
+- [ ] 에이전트 문서 생성
+- [ ] 슈퍼바이저 문서 생성
+- [ ] API 문서 생성
+- [ ] UI 문서 생성
 
-- [x] Enhance agent selection and coordination
-  - [x] Automatically select multiple agents for news queries
-  - [x] Implement parallel search across different providers
-  - [x] Add result merging and deduplication
+### 테스트
+- [ ] 도구 단위 테스트 생성
+- [ ] 에이전트 단위 테스트 생성
+- [ ] 슈퍼바이저 단위 테스트 생성
+- [ ] API 통합 테스트 생성
+- [ ] 엔드-투-엔드 테스트 생성
+- [ ] 성능 테스트 생성
 
-- [x] Add specific handling for news-related queries
-  - [x] Implement a specialized news report generation workflow
-  - [x] Add section-based organization for news reports
-  - [x] Implement source credibility assessment
+## 6단계: 배포 및 CI/CD
 
-## Future Enhancements
-- [ ] Add support for more LLM providers
-- [x] Implement parallel agent execution
-- [ ] Add memory and context management
-- [x] Implement agent performance metrics with LangSmith
-- [x] Create monitoring UI for debugging and testing
-- [ ] Enhance LangSmith integration with more detailed tracing
-- [ ] Implement fine-tuning capabilities for specialized domains
-- [ ] Add multi-language support
-- [ ] Implement authentication and user management
-- [ ] Create plugin system for extending agent capabilities
-- [x] Develop automated agent selection based on query analysis
-- [x] Evaluate using built-in LangChain tools instead of custom implementations
-  - [x] Evaluate Google Serper tool for search agent
-  - [x] Evaluate SQL Database toolkit for SQL RAG agent
-  - [x] Evaluate vector store integrations for vector storage and retrieval agents
-  - [x] Evaluate LangGraph's create_react_agent for agent implementation
+### 배포
+- [ ] Docker 컨테이너 생성
+- [ ] docker-compose.yml 생성
+- [ ] 배포 문서 생성
 
-## Final Deployment Tasks
-- [ ] Set up CI/CD pipeline
-- [ ] Create Docker container for easy deployment
-- [ ] Create docker-compose.yml for easy local deployment
+### CI/CD
+- [ ] GitHub Actions 워크플로우 생성
+- [ ] 자동화된 테스트 구현
+- [ ] 자동화된 배포 구현
