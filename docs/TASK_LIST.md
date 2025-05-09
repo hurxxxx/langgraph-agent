@@ -111,8 +111,17 @@ This document tracks the development tasks for the multi-agent supervisor system
 - [x] Add support for image metadata and attribution
 
 ### Testing & Deployment
-- [ ] Create unit tests for all components
+- [x] Create unit tests for all components
+  - [x] Supervisor tests
+  - [x] MCP agent tests
+  - [x] Specialized MCP agent tests (CrewAI, AutoGen, LangGraph)
+  - [x] Search agent tests
+  - [x] Vector storage agent tests
+  - [x] API tests
 - [ ] Create integration tests for the system
+  - [ ] End-to-end tests
+  - [ ] API integration tests
+  - [ ] Agent interaction tests
 - [ ] Set up CI/CD pipeline
 - [ ] Create Docker container for easy deployment
 - [ ] Create docker-compose.yml for easy local deployment
