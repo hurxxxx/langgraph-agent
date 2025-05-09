@@ -15,14 +15,7 @@ def test_search_agent():
     print("\n=== Test 1: Regular query without time period ===")
     config = SearchAgentConfig(
         providers=["serper"],
-        default_provider="serper",
-        max_results=3,
-        parallel_search=False,
-        evaluate_results=True,
-        additional_queries=False,
-        optimize_query=True,
-        detect_time_references=False,
-        auto_set_time_period=False
+        max_results=3
     )
 
     search_agent = SearchAgent(config)
@@ -36,22 +29,15 @@ def test_search_agent():
 
     updated_state = search_agent(state)
     print("\nResponse (excerpt):")
-    print(updated_state["messages"][-1]["content"][:300] + "..."
-          if len(updated_state["messages"][-1]["content"]) > 300
-          else updated_state["messages"][-1]["content"])
+    last_message = updated_state["messages"][-1]
+    content = last_message.content if hasattr(last_message, "content") else str(last_message)
+    print(content[:300] + "..." if len(content) > 300 else content)
 
     # Test 2: Query with explicit time period (1 day)
     print("\n=== Test 2: Query with explicit time period (1 day) ===")
     config = SearchAgentConfig(
         providers=["serper"],
-        default_provider="serper",
         max_results=3,
-        parallel_search=False,
-        evaluate_results=True,
-        additional_queries=False,
-        optimize_query=True,
-        detect_time_references=False,
-        auto_set_time_period=False,
         time_period="1d"  # Set explicit time period
     )
 
@@ -66,22 +52,17 @@ def test_search_agent():
 
     updated_state = search_agent(state)
     print("\nResponse (excerpt):")
-    print(updated_state["messages"][-1]["content"][:300] + "..."
-          if len(updated_state["messages"][-1]["content"]) > 300
-          else updated_state["messages"][-1]["content"])
+    last_message = updated_state["messages"][-1]
+    content = last_message.content if hasattr(last_message, "content") else str(last_message)
+    print(content[:300] + "..." if len(content) > 300 else content)
 
     # Test 3: Time-based query with auto detection
     print("\n=== Test 3: Time-based query with auto detection ===")
     config = SearchAgentConfig(
         providers=["serper"],
-        default_provider="serper",
         max_results=3,
-        parallel_search=False,
-        evaluate_results=True,
-        additional_queries=False,
-        optimize_query=True,
-        detect_time_references=True,
-        auto_set_time_period=True
+        news_only=True,
+        time_period="1d"
     )
 
     search_agent = SearchAgent(config)
@@ -95,9 +76,9 @@ def test_search_agent():
 
     updated_state = search_agent(state)
     print("\nResponse (excerpt):")
-    print(updated_state["messages"][-1]["content"][:300] + "..."
-          if len(updated_state["messages"][-1]["content"]) > 300
-          else updated_state["messages"][-1]["content"])
+    last_message = updated_state["messages"][-1]
+    content = last_message.content if hasattr(last_message, "content") else str(last_message)
+    print(content[:300] + "..." if len(content) > 300 else content)
 
     return updated_state
 

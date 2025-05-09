@@ -1,25 +1,26 @@
 """
 Vector Storage Agent for Multi-Agent System
 
-This module implements a vector storage agent that can store, update, and delete documents
-in various vector databases:
+This module implements a vector storage agent using LangGraph's create_react_agent function
+and LangChain's vector store tools.
+
+The agent can store, update, and delete documents in various vector databases:
 - Chroma
 - Qdrant
 - Milvus
 - pgvector
 - Meilisearch
-
-The agent supports different operations (store, update, delete) and can be configured
-to use different vector stores.
 """
 
 import os
-from typing import Dict, List, Any, Optional, TypedDict, Annotated, Literal, Union
-from pydantic import BaseModel, Field
+import json
+from typing import Dict, List, Any, Optional, Literal, TypedDict, Annotated
+from pydantic import BaseModel
 
+# LangChain imports
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import SystemMessage
+from langchain_core.tools import tool
 from langchain_core.documents import Document
 
 # Vector stores
@@ -30,6 +31,11 @@ from langchain_community.vectorstores import (
     PGVector,
     Meilisearch
 )
+
+# LangGraph imports
+from langgraph.prebuilt import create_react_agent
+from langgraph.graph import END, StateGraph
+from langgraph.graph.message import add_messages
 
 
 class VectorStoreDocument(BaseModel):
@@ -51,67 +57,106 @@ class VectorStorageAgentConfig(BaseModel):
     system_message: str = """
     You are a vector storage agent that manages documents in a vector database.
     Your job is to:
-    1. Understand the operation requested (store, update, delete)
+    1. Understand the operation requested (store, update, delete, search)
     2. Process documents accordingly
     3. Report the results of the operation
 
-    Always confirm what operation was performed and provide document IDs.
+    Always confirm what operation was performed and provide document IDs when applicable.
+
+    Use the following tools to manage documents in the vector database:
+    - store_document: Store a document in the vector database
+    - update_document: Update a document in the vector database
+    - delete_document: Delete a document from the vector database
+    - search_documents: Search for documents in the vector database
     """
+
+
+class AgentState(TypedDict):
+    """State for the vector storage agent."""
+    messages: Annotated[list, add_messages]
+    agent_outcome: Optional[Dict[str, Any]]
 
 
 class VectorStorageAgent:
     """
-    Vector storage agent that manages documents in various vector databases.
+    Vector storage agent using LangGraph's create_react_agent function.
     """
 
-    def __init__(self, config: VectorStorageAgentConfig = VectorStorageAgentConfig()):
+    def __init__(self, config: Optional[VectorStorageAgentConfig] = None):
         """
         Initialize the vector storage agent.
 
         Args:
             config: Configuration for the vector storage agent
         """
+        # Load configuration from environment if not provided
+        if config is None:
+            config = self._load_config_from_env()
+
         self.config = config
 
         # Initialize LLM
-        try:
-            self.llm = ChatOpenAI(
-                model=config.llm_model,
-                temperature=config.temperature,
-                streaming=config.streaming
-            )
-        except Exception as e:
-            print(f"Warning: Could not initialize ChatOpenAI: {str(e)}")
-            # Use a mock implementation
-            class MockLLM:
-                def invoke(self, messages):
-                    return {"content": f"Mock response about vector storage operations"}
-            self.llm = MockLLM()
+        self.llm = ChatOpenAI(
+            model=config.llm_model,
+            temperature=config.temperature,
+            streaming=config.streaming
+        )
 
         # Initialize embeddings
-        try:
-            self.embeddings = OpenAIEmbeddings(
-                model=config.embedding_model
-            )
-        except Exception as e:
-            print(f"Warning: Could not initialize OpenAIEmbeddings: {str(e)}")
-            # Use a mock implementation
-            class MockEmbeddings:
-                def embed_documents(self, texts):
-                    return [[0.1] * 1536 for _ in texts]
-                def embed_query(self, text):
-                    return [0.1] * 1536
-            self.embeddings = MockEmbeddings()
+        self.embeddings = OpenAIEmbeddings(
+            model=config.embedding_model
+        )
 
         # Initialize vector store
         self.vector_store = self._initialize_vector_store()
 
-        # Create prompt template
-        self.prompt = ChatPromptTemplate.from_messages([
-            SystemMessage(content=config.system_message),
-            MessagesPlaceholder(variable_name="messages"),
-            SystemMessage(content="Operation results: {operation_results}")
-        ])
+        # Initialize vector store tools
+        self.vector_tools = self._initialize_vector_tools()
+
+        # Create ReAct agent with system message
+        system_message = self.config.system_message
+        self.agent = create_react_agent(
+            self.llm,
+            self.vector_tools,
+            prompt=SystemMessage(content=system_message)
+        )
+
+        # Create agent graph
+        self.graph = StateGraph(AgentState)
+        self.graph.add_node("agent", self.agent)
+        self.graph.set_entry_point("agent")
+        self.graph.add_edge("agent", END)
+        self.compiled_graph = self.graph.compile()
+
+    def _load_config_from_env(self) -> VectorStorageAgentConfig:
+        """
+        Load configuration from environment variables.
+
+        Returns:
+            VectorStorageAgentConfig: Configuration loaded from environment
+        """
+        # Get vector store configuration from environment
+        store_type = os.getenv("VECTOR_STORE_TYPE", "chroma")
+        collection_name = os.getenv("VECTOR_COLLECTION_NAME", "default_collection")
+        persist_directory = os.getenv("VECTOR_PERSIST_DIRECTORY", "./vector_db")
+        connection_string = os.getenv("VECTOR_CONNECTION_STRING", None)
+
+        # Get embedding and LLM configuration from environment
+        embedding_model = os.getenv("VECTOR_EMBEDDING_MODEL", "text-embedding-3-small")
+        llm_model = os.getenv("VECTOR_LLM_MODEL", "gpt-4o")
+        temperature = float(os.getenv("VECTOR_TEMPERATURE", "0"))
+        streaming = os.getenv("VECTOR_STREAMING", "true").lower() == "true"
+
+        return VectorStorageAgentConfig(
+            store_type=store_type,
+            collection_name=collection_name,
+            embedding_model=embedding_model,
+            llm_model=llm_model,
+            temperature=temperature,
+            streaming=streaming,
+            persist_directory=persist_directory,
+            connection_string=connection_string
+        )
 
     def _initialize_vector_store(self):
         """
@@ -147,7 +192,7 @@ class VectorStorageAgent:
                 return PGVector(
                     collection_name=self.config.collection_name,
                     embedding_function=self.embeddings,
-                    connection_string=self.config.connection_string or "postgresql://postgres:postgres@localhost:5432/vectordb"
+                    connection_string=self.config.connection_string or "postgresql://postgres:102938@localhost:5432/vectordb"
                 )
             elif self.config.store_type == "meilisearch":
                 return Meilisearch(
@@ -170,115 +215,147 @@ class VectorStorageAgent:
                 def persist(self):
                     return True
 
+                def similarity_search(self, query, k=4):
+                    return [Document(page_content=f"Mock document {i}", metadata={"id": f"doc_{i}"}) for i in range(k)]
+
             return MockVectorStore()
 
-    def _parse_operation(self, message: str) -> Dict[str, Any]:
+    def _initialize_vector_tools(self) -> List[Any]:
         """
-        Parse the operation requested in the message.
-
-        Args:
-            message: User message
+        Initialize vector store tools.
 
         Returns:
-            Dict: Parsed operation details
+            List[Any]: List of vector store tools
         """
-        # This is a simplified implementation
-        # In a real system, you would use the LLM to parse the operation
+        tools = []
 
-        operation = {}
+        @tool
+        def store_document(content: str, metadata: Optional[str] = None) -> str:
+            """
+            Store a document in the vector database.
 
-        if "store" in message.lower():
-            operation["type"] = "store"
-        elif "update" in message.lower():
-            operation["type"] = "update"
-        elif "delete" in message.lower():
-            operation["type"] = "delete"
-        else:
-            operation["type"] = "unknown"
+            Args:
+                content: The content of the document to store
+                metadata: Optional JSON string with metadata for the document
 
-        # Extract document content (simplified)
-        # In a real system, you would use more sophisticated parsing
-        if "content:" in message:
-            content_start = message.find("content:") + 8
-            content_end = message.find("\n", content_start) if "\n" in message[content_start:] else len(message)
-            operation["content"] = message[content_start:content_end].strip()
+            Returns:
+                str: Result of the operation with document ID
+            """
+            try:
+                # Parse metadata if provided
+                doc_metadata = {}
+                if metadata:
+                    try:
+                        doc_metadata = json.loads(metadata)
+                    except:
+                        doc_metadata = {"raw_metadata": metadata}
 
-        return operation
+                # Create document
+                document = Document(page_content=content, metadata=doc_metadata)
 
-    def store_documents(self, documents: List[VectorStoreDocument]) -> Dict[str, Any]:
-        """
-        Store documents in the vector database.
+                # Add document to vector store
+                ids = self.vector_store.add_documents([document])
 
-        Args:
-            documents: List of documents to store
+                # Persist if supported
+                if hasattr(self.vector_store, "persist"):
+                    self.vector_store.persist()
 
-        Returns:
-            Dict: Results of the operation
-        """
-        # Convert to LangChain documents
-        lc_documents = [
-            Document(page_content=doc.content, metadata=doc.metadata)
-            for doc in documents
-        ]
+                return f"Document stored successfully with ID: {ids[0]}"
+            except Exception as e:
+                return f"Error storing document: {str(e)}"
 
-        # Add documents to vector store
-        ids = self.vector_store.add_documents(lc_documents)
+        @tool
+        def update_document(document_id: str, content: str, metadata: Optional[str] = None) -> str:
+            """
+            Update a document in the vector database.
 
-        # If the vector store supports persistence, persist it
-        if hasattr(self.vector_store, "persist"):
-            self.vector_store.persist()
+            Args:
+                document_id: ID of the document to update
+                content: New content for the document
+                metadata: Optional JSON string with new metadata for the document
 
-        return {
-            "operation": "store",
-            "document_ids": ids,
-            "count": len(ids)
-        }
+            Returns:
+                str: Result of the operation
+            """
+            try:
+                # Parse metadata if provided
+                doc_metadata = {}
+                if metadata:
+                    try:
+                        doc_metadata = json.loads(metadata)
+                    except:
+                        doc_metadata = {"raw_metadata": metadata}
 
-    def update_documents(self, documents: List[VectorStoreDocument], ids: List[str]) -> Dict[str, Any]:
-        """
-        Update documents in the vector database.
+                # Delete existing document
+                self.vector_store.delete([document_id])
 
-        Args:
-            documents: List of documents to update
-            ids: List of document IDs to update
+                # Create new document
+                document = Document(page_content=content, metadata=doc_metadata)
 
-        Returns:
-            Dict: Results of the operation
-        """
-        # This is a simplified implementation
-        # Some vector stores don't support direct updates, so we delete and re-add
+                # Add document to vector store
+                ids = self.vector_store.add_documents([document])
 
-        # Delete existing documents
-        self.delete_documents(ids)
+                # Persist if supported
+                if hasattr(self.vector_store, "persist"):
+                    self.vector_store.persist()
 
-        # Store new documents
-        result = self.store_documents(documents)
-        result["operation"] = "update"
+                return f"Document updated successfully with new ID: {ids[0]}"
+            except Exception as e:
+                return f"Error updating document: {str(e)}"
 
-        return result
+        @tool
+        def delete_document(document_id: str) -> str:
+            """
+            Delete a document from the vector database.
 
-    def delete_documents(self, ids: List[str]) -> Dict[str, Any]:
-        """
-        Delete documents from the vector database.
+            Args:
+                document_id: ID of the document to delete
 
-        Args:
-            ids: List of document IDs to delete
+            Returns:
+                str: Result of the operation
+            """
+            try:
+                # Delete document
+                self.vector_store.delete([document_id])
 
-        Returns:
-            Dict: Results of the operation
-        """
-        # Delete documents from vector store
-        self.vector_store.delete(ids)
+                # Persist if supported
+                if hasattr(self.vector_store, "persist"):
+                    self.vector_store.persist()
 
-        # If the vector store supports persistence, persist it
-        if hasattr(self.vector_store, "persist"):
-            self.vector_store.persist()
+                return f"Document with ID {document_id} deleted successfully"
+            except Exception as e:
+                return f"Error deleting document: {str(e)}"
 
-        return {
-            "operation": "delete",
-            "document_ids": ids,
-            "count": len(ids)
-        }
+        @tool
+        def search_documents(query: str, k: int = 4) -> str:
+            """
+            Search for documents in the vector database.
+
+            Args:
+                query: Search query
+                k: Number of results to return
+
+            Returns:
+                str: Search results
+            """
+            try:
+                # Search for documents
+                docs = self.vector_store.similarity_search(query, k=k)
+
+                # Format results
+                results = []
+                for i, doc in enumerate(docs):
+                    results.append(f"Result {i+1}:")
+                    results.append(f"Content: {doc.page_content}")
+                    results.append(f"Metadata: {doc.metadata}")
+                    results.append("")
+
+                return "\n".join(results) if results else "No results found"
+            except Exception as e:
+                return f"Error searching documents: {str(e)}"
+
+        tools.extend([store_document, update_document, delete_document, search_documents])
+        return tools
 
     def __call__(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -290,54 +367,96 @@ class VectorStorageAgent:
         Returns:
             Dict[str, Any]: Updated state
         """
-        # Extract the message from the last message
-        message = state["messages"][-1]["content"]
+        try:
+            # Extract the query from the last message
+            if "messages" in state and isinstance(state["messages"], list) and state["messages"]:
+                if isinstance(state["messages"][-1], dict) and "content" in state["messages"][-1]:
+                    query = state["messages"][-1]["content"]
+                else:
+                    query = str(state["messages"][-1])
+            else:
+                query = state.get("query", "")
 
-        # Parse the operation
-        operation = self._parse_operation(message)
+            # Create input for the agent
+            agent_input = {"messages": [{"role": "user", "content": query}]}
 
-        # Execute the operation
-        if operation["type"] == "store":
-            # Create a sample document for demonstration
-            # In a real system, you would extract this from the message
-            documents = [
-                VectorStoreDocument(
-                    content=operation.get("content", "Sample content"),
-                    metadata={"source": "user_message"}
-                )
-            ]
-            result = self.store_documents(documents)
-        elif operation["type"] == "update":
-            # This is a placeholder - in a real system, you would extract document IDs
-            documents = [
-                VectorStoreDocument(
-                    content=operation.get("content", "Updated content"),
-                    metadata={"source": "user_message", "updated": True}
-                )
-            ]
-            result = self.update_documents(documents, ["doc_id_1"])
-        elif operation["type"] == "delete":
-            # This is a placeholder - in a real system, you would extract document IDs
-            result = self.delete_documents(["doc_id_1"])
-        else:
-            result = {
-                "operation": "unknown",
-                "error": "Could not determine the requested operation"
+            # Run the agent
+            result = self.compiled_graph.invoke(agent_input)
+
+            # Update the state with the agent's response
+            if "messages" in result and result["messages"]:
+                state["messages"] = state.get("messages", [])[:-1] + result["messages"]
+
+            # Store agent outcome in the state
+            state["agent_outputs"] = state.get("agent_outputs", {})
+            state["agent_outputs"]["vector_storage"] = {
+                "result": result,
+                "query": query
             }
 
-        # Generate response using LLM
-        response = self.llm.invoke(
-            self.prompt.format(
-                messages=state["messages"],
-                operation_results=str(result)
-            )
-        )
+            return state
 
-        # Update state
-        state["agent_outputs"]["vector_storage"] = result
-        state["messages"].append({"role": "assistant", "content": response.content})
+        except Exception as e:
+            # Handle errors gracefully
+            error_message = f"Vector storage agent encountered an error: {str(e)}"
+            print(error_message)
 
-        return state
+            # Update state with error information
+            state["agent_outputs"] = state.get("agent_outputs", {})
+            state["agent_outputs"]["vector_storage"] = {
+                "error": str(e),
+                "has_error": True
+            }
+
+            # Add error response to messages
+            if "messages" in state:
+                state["messages"].append({
+                    "role": "assistant",
+                    "content": f"I apologize, but I encountered an error while processing your vector storage request: {str(e)}. Please try again or provide a different request."
+                })
+
+            return state
+
+    async def astream(self, state: Dict[str, Any], stream_mode: str = "values") -> Any:
+        """
+        Stream the agent's response.
+
+        Args:
+            state: Current state of the system
+            stream_mode: Streaming mode (values, updates, or steps)
+
+        Yields:
+            Dict[str, Any]: Streamed response
+        """
+        try:
+            # Extract the query from the last message
+            if "messages" in state and isinstance(state["messages"], list) and state["messages"]:
+                if isinstance(state["messages"][-1], dict) and "content" in state["messages"][-1]:
+                    query = state["messages"][-1]["content"]
+                else:
+                    query = str(state["messages"][-1])
+            else:
+                query = state.get("query", "")
+
+            # Create input for the agent
+            agent_input = {"messages": [{"role": "user", "content": query}]}
+
+            # Stream the agent's response
+            for chunk in self.compiled_graph.stream(
+                agent_input,
+                stream_mode=stream_mode
+            ):
+                yield chunk
+        except Exception as e:
+            # Handle errors gracefully
+            error_message = f"Error in vector storage agent streaming: {str(e)}"
+            print(error_message)
+            yield {
+                "messages": [
+                    {"role": "user", "content": state.get("query", "")},
+                    {"role": "assistant", "content": f"I apologize, but I encountered an error while processing your vector storage request: {str(e)}. Please try again or provide a different request."}
+                ]
+            }
 
 
 # Example usage
@@ -358,4 +477,4 @@ if __name__ == "__main__":
     }
 
     updated_state = vector_storage_agent(state)
-    print(updated_state["messages"][-1]["content"])
+    print(updated_state["messages"][-1].content if hasattr(updated_state["messages"][-1], "content") else updated_state["messages"][-1])

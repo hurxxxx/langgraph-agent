@@ -167,19 +167,19 @@ This document tracks the development tasks for the multi-agent supervisor system
 
 ### Agent Refactoring with LangGraph and LangChain
 - [ ] Refactor agents using LangGraph's create_react_agent
-  - [ ] Refactor search agent to use create_react_agent
-  - [ ] Refactor SQL RAG agent to use create_react_agent
-  - [ ] Refactor vector storage agent to use create_react_agent
-  - [ ] Refactor image generation agent to use create_react_agent
+  - [x] Refactor search agent to use create_react_agent
+  - [x] Refactor SQL RAG agent to use create_react_agent
+  - [x] Refactor vector storage agent to use create_react_agent
+  - [ ] Refactor image generation agent to use create_react_agent (In Progress)
   - [ ] Refactor document generation agents to use create_react_agent
   - [ ] Refactor MCP agent to use create_react_agent
   - [ ] Update supervisor to work with refactored agents
 
 - [ ] Replace custom implementations with LangChain built-in tools
-  - [ ] Replace custom search implementation with LangChain's TavilySearch and GoogleSerperAPIWrapper
-  - [ ] Replace custom SQL RAG implementation with LangChain's SQLDatabaseChain or SQL agent
-  - [ ] Replace custom vector storage implementation with LangChain's vector store integrations
-  - [ ] Replace custom image generation with LangChain's image generation tools
+  - [x] Replace custom search implementation with LangChain's TavilySearch and GoogleSerperAPIWrapper
+  - [x] Replace custom SQL RAG implementation with LangChain's SQL database tools
+  - [x] Replace custom vector storage implementation with LangChain's vector store integrations
+  - [ ] Replace custom image generation with LangChain's image generation tools (In Progress)
   - [ ] Integrate LangChain's document loaders and text splitters
 
 - [ ] Optimize agent performance with LangGraph features

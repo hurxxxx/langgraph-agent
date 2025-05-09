@@ -1,7 +1,10 @@
 """
 SQL RAG Agent for Multi-Agent System
 
-This module implements a SQL RAG agent that can:
+This module implements a SQL RAG agent using LangGraph's create_react_agent function
+and LangChain's SQL database tools.
+
+The agent can:
 - Generate SQL queries from natural language
 - Execute SQL queries against a database
 - Combine SQL results with LLM responses
@@ -9,84 +12,20 @@ This module implements a SQL RAG agent that can:
 """
 
 import os
-import json
-import time
-from typing import Dict, List, Any, Optional, Literal, Union
-from pydantic import BaseModel, Field
-import psycopg2
-import sqlite3
+from typing import Dict, List, Any, Optional, Literal, TypedDict, Annotated
+from pydantic import BaseModel
 
-# Import utility functions
-# Import utility functions
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+# LangChain imports
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import SystemMessage
+from langchain_core.tools import tool
+from langchain_community.utilities import SQLDatabase
+from langchain_community.tools.sql_database.tool import QuerySQLDataBaseTool
 
-from src.utils.caching import cache_result, MemoryCache
-
-# Import LangChain components
-try:
-    from langchain_openai import ChatOpenAI
-    from langchain_core.messages import HumanMessage, SystemMessage
-    from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-    from langchain_community.utilities import SQLDatabase
-    from langchain_experimental.sql import SQLDatabaseChain
-except ImportError:
-    print("Warning: LangChain components not available. Using mock implementations.")
-    # Mock implementations for testing
-    class ChatOpenAI:
-        def __init__(self, model=None, temperature=0, streaming=False):
-            self.model = model
-            self.temperature = temperature
-            self.streaming = streaming
-
-        def invoke(self, messages):
-            return {"content": f"Response from {self.model} about {messages[-1]['content']}"}
-
-    class HumanMessage:
-        def __init__(self, content):
-            self.content = content
-
-    class SystemMessage:
-        def __init__(self, content):
-            self.content = content
-
-    class MessagesPlaceholder:
-        def __init__(self, variable_name):
-            self.variable_name = variable_name
-
-    class ChatPromptTemplate:
-        @classmethod
-        def from_messages(cls, messages):
-            return cls()
-
-        def format(self, **kwargs):
-            return kwargs
-
-    class SQLDatabase:
-        @classmethod
-        def from_uri(cls, uri):
-            return cls()
-
-        def run(self, query):
-            return f"Mock result for query: {query}"
-
-    class SQLDatabaseChain:
-        @classmethod
-        def from_llm(cls, llm, db, verbose=False):
-            return cls()
-
-        def run(self, query):
-            return f"Mock result for query: {query}"
-
-
-class SQLQueryResult(BaseModel):
-    """Model for a SQL query result."""
-    query: str
-    result: List[Dict[str, Any]]
-    execution_time: float
-    row_count: int
-    error: Optional[str] = None
+# LangGraph imports
+from langgraph.prebuilt import create_react_agent
+from langgraph.graph import END, StateGraph
+from langgraph.graph.message import add_messages
 
 
 class SQLRAGAgentConfig(BaseModel):
@@ -94,16 +33,9 @@ class SQLRAGAgentConfig(BaseModel):
     db_type: Literal["postgresql", "sqlite"] = "postgresql"
     connection_string: Optional[str] = None
     sqlite_path: Optional[str] = None
-    llm_provider: Literal["openai", "anthropic"] = "openai"
-    openai_model: str = "gpt-4o"
-    anthropic_model: str = "claude-3-opus-20240229"
+    llm_model: str = "gpt-4o"
     temperature: float = 0
     streaming: bool = True
-    max_tokens: int = 4000
-    # Caching configuration
-    use_cache: bool = True
-    cache_ttl: int = 3600  # 1 hour
-    # System messages
     system_message: str = """
     You are a SQL RAG agent that can generate SQL queries from natural language,
     execute them against a database, and provide insights based on the results.
@@ -117,288 +49,153 @@ class SQLRAGAgentConfig(BaseModel):
 
     Always explain your reasoning and the SQL query you generated.
     If there's an error in the query, explain what went wrong and suggest a fix.
+
+    When you need to run a SQL query, use the query_sql_db tool.
     """
-    sql_generation_system_message: str = """
-    You are an expert SQL query generator. Your job is to convert natural language questions
-    into SQL queries that can be executed against a database.
 
-    The database has the following schema:
-    {schema}
 
-    Generate a SQL query that answers the following question: {question}
-
-    Only return the SQL query without any explanations or markdown formatting.
-    """
+class AgentState(TypedDict):
+    """State for the SQL RAG agent."""
+    messages: Annotated[list, add_messages]
+    agent_outcome: Optional[Dict[str, Any]]
 
 
 class SQLRAGAgent:
     """
-    SQL RAG agent that can generate and execute SQL queries and provide insights.
+    SQL RAG agent using LangGraph's create_react_agent function.
     """
 
-    def __init__(self, config: SQLRAGAgentConfig = SQLRAGAgentConfig()):
+    def __init__(self, config: Optional[SQLRAGAgentConfig] = None):
         """
         Initialize the SQL RAG agent.
 
         Args:
             config: Configuration for the SQL RAG agent
         """
+        # Load configuration from environment if not provided
+        if config is None:
+            config = self._load_config_from_env()
+
         self.config = config
 
-        # Initialize cache if enabled
-        if self.config.use_cache:
-            self.cache = MemoryCache(ttl=self.config.cache_ttl)
-        else:
-            self.cache = None
-
         # Initialize LLM
-        try:
-            self.llm = ChatOpenAI(
-                model=config.openai_model,
-                temperature=config.temperature,
-                streaming=config.streaming
-            )
-        except Exception as e:
-            print(f"Warning: Could not initialize ChatOpenAI: {str(e)}")
-            # Use a mock implementation
-            class MockLLM:
-                def invoke(self, messages):
-                    return {"content": f"Mock response about SQL query"}
-            self.llm = MockLLM()
+        self.llm = ChatOpenAI(
+            model=config.llm_model,
+            temperature=config.temperature,
+            streaming=config.streaming
+        )
 
         # Initialize database connection
         self.db = self._initialize_database()
 
-        # Get database schema
-        self.schema = self._get_database_schema()
+        # Initialize SQL tools
+        self.sql_tools = self._initialize_sql_tools()
 
-        # Create prompt templates
-        self.sql_generation_prompt = ChatPromptTemplate.from_messages([
-            SystemMessage(content=config.sql_generation_system_message.format(
-                schema=self.schema,
-                question="{question}"
-            )),
-            HumanMessage(content="{question}")
-        ])
+        # Create ReAct agent with system message
+        system_message = self.config.system_message
+        self.agent = create_react_agent(
+            self.llm,
+            self.sql_tools,
+            prompt=SystemMessage(content=system_message)
+        )
 
-        self.response_prompt = ChatPromptTemplate.from_messages([
-            SystemMessage(content=config.system_message),
-            MessagesPlaceholder(variable_name="messages"),
-            SystemMessage(content="SQL query: {query}"),
-            SystemMessage(content="Query result: {result}")
-        ])
+        # Create agent graph
+        self.graph = StateGraph(AgentState)
+        self.graph.add_node("agent", self.agent)
+        self.graph.set_entry_point("agent")
+        self.graph.add_edge("agent", END)
+        self.compiled_graph = self.graph.compile()
 
-    def _initialize_database(self):
+    def _load_config_from_env(self) -> SQLRAGAgentConfig:
+        """
+        Load configuration from environment variables.
+
+        Returns:
+            SQLRAGAgentConfig: Configuration loaded from environment
+        """
+        # Get database configuration from environment
+        db_type = os.getenv("SQL_DB_TYPE", "postgresql")
+        connection_string = os.getenv("SQL_CONNECTION_STRING", "postgresql://postgres:102938@localhost:5432/langgraph_agent_db")
+        sqlite_path = os.getenv("SQL_SQLITE_PATH", "database.sqlite")
+
+        # Get LLM configuration from environment
+        llm_model = os.getenv("SQL_LLM_MODEL", "gpt-4o")
+        temperature = float(os.getenv("SQL_TEMPERATURE", "0"))
+        streaming = os.getenv("SQL_STREAMING", "true").lower() == "true"
+
+        return SQLRAGAgentConfig(
+            db_type=db_type,
+            connection_string=connection_string,
+            sqlite_path=sqlite_path,
+            llm_model=llm_model,
+            temperature=temperature,
+            streaming=streaming
+        )
+
+    def _initialize_database(self) -> Optional[SQLDatabase]:
         """
         Initialize the database connection.
 
         Returns:
-            Database connection
+            Optional[SQLDatabase]: Database connection or None if connection fails
         """
-        if self.config.db_type == "postgresql":
-            if not self.config.connection_string:
-                # Use default connection string
-                self.config.connection_string = "postgresql://postgres:102938@localhost:5432/langgraph_agent_db"
-
-            try:
-                return SQLDatabase.from_uri(self.config.connection_string)
-            except Exception as e:
-                print(f"Warning: Could not connect to PostgreSQL: {str(e)}")
-                return None
-
-        elif self.config.db_type == "sqlite":
-            if not self.config.sqlite_path:
-                # Use default SQLite path
-                self.config.sqlite_path = "database.sqlite"
-
-            try:
-                return SQLDatabase.from_uri(f"sqlite:///{self.config.sqlite_path}")
-            except Exception as e:
-                print(f"Warning: Could not connect to SQLite: {str(e)}")
-                return None
-
-        else:
-            raise ValueError(f"Unsupported database type: {self.config.db_type}")
-
-    def _get_database_schema(self):
-        """
-        Get the database schema.
-
-        Returns:
-            str: Database schema
-        """
-        if not self.db:
-            return "Database connection not available."
-
         try:
             if self.config.db_type == "postgresql":
-                conn = psycopg2.connect(self.config.connection_string)
-                cursor = conn.cursor()
+                if not self.config.connection_string:
+                    # Use default connection string
+                    self.config.connection_string = "postgresql://postgres:102938@localhost:5432/langgraph_agent_db"
 
-                # Get all tables
-                cursor.execute("""
-                SELECT table_name FROM information_schema.tables
-                WHERE table_schema = 'public'
-                """)
-                tables = [row[0] for row in cursor.fetchall()]
-
-                schema = []
-                for table in tables:
-                    # Get columns for each table
-                    cursor.execute(f"""
-                    SELECT column_name, data_type, is_nullable
-                    FROM information_schema.columns
-                    WHERE table_name = '{table}'
-                    """)
-                    columns = cursor.fetchall()
-
-                    schema.append(f"Table: {table}")
-                    schema.append("Columns:")
-                    for column in columns:
-                        schema.append(f"  - {column[0]} ({column[1]}, {'NULL' if column[2] == 'YES' else 'NOT NULL'})")
-                    schema.append("")
-
-                conn.close()
-                return "\n".join(schema)
+                return SQLDatabase.from_uri(
+                    self.config.connection_string,
+                    include_tables=None,  # Include all tables
+                    sample_rows_in_table_info=3
+                )
 
             elif self.config.db_type == "sqlite":
-                conn = sqlite3.connect(self.config.sqlite_path)
-                cursor = conn.cursor()
+                if not self.config.sqlite_path:
+                    # Use default SQLite path
+                    self.config.sqlite_path = "database.sqlite"
 
-                # Get all tables
-                cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-                tables = [row[0] for row in cursor.fetchall()]
-
-                schema = []
-                for table in tables:
-                    # Get columns for each table
-                    cursor.execute(f"PRAGMA table_info({table})")
-                    columns = cursor.fetchall()
-
-                    schema.append(f"Table: {table}")
-                    schema.append("Columns:")
-                    for column in columns:
-                        schema.append(f"  - {column[1]} ({column[2]}, {'NOT NULL' if column[3] else 'NULL'})")
-                    schema.append("")
-
-                conn.close()
-                return "\n".join(schema)
+                return SQLDatabase.from_uri(
+                    f"sqlite:///{self.config.sqlite_path}",
+                    include_tables=None,  # Include all tables
+                    sample_rows_in_table_info=3
+                )
 
             else:
-                return "Unsupported database type."
+                print(f"Unsupported database type: {self.config.db_type}")
+                return None
 
         except Exception as e:
-            print(f"Error getting database schema: {str(e)}")
-            return "Error getting database schema."
+            print(f"Error initializing database: {str(e)}")
+            return None
 
-    def _generate_sql_query(self, question: str) -> str:
+    def _initialize_sql_tools(self) -> List[Any]:
         """
-        Generate a SQL query from a natural language question.
-
-        Args:
-            question: Natural language question
+        Initialize SQL tools.
 
         Returns:
-            str: Generated SQL query
+            List[Any]: List of SQL tools
         """
-        # Use cache if enabled
-        if self.cache:
-            cached_result = self.cache.get(f"sql_query:{question}")
-            if cached_result:
-                return cached_result
-        if not self.db:
-            return "SELECT 'Database connection not available.' AS error"
+        tools = []
 
-        try:
-            # Generate SQL query using LLM
-            response = self.llm.invoke(
-                self.sql_generation_prompt.format(question=question)
+        if self.db:
+            # Create SQL query tool
+            query_sql_tool = QuerySQLDataBaseTool(
+                db=self.db,
+                description="Useful for when you need to query a SQL database to answer questions about data."
             )
+            tools.append(query_sql_tool)
+        else:
+            # Create a mock SQL tool if database connection failed
+            @tool
+            def query_sql_db(query: str) -> str:
+                """Execute a SQL query and return the results."""
+                return "Error: Database connection not available."
 
-            # Extract query from response
-            if isinstance(response, dict):
-                query = response.get("content", "")
-            elif hasattr(response, "content"):
-                query = response.content
-            else:
-                query = str(response)
+            tools.append(query_sql_db)
 
-            # Clean up the query
-            query = query.strip()
-            if query.startswith("```sql"):
-                query = query[6:]
-            if query.endswith("```"):
-                query = query[:-3]
-
-            query = query.strip()
-
-            # Cache the result if caching is enabled
-            if self.cache:
-                self.cache.set(f"sql_query:{question}", query)
-
-            return query
-
-        except Exception as e:
-            print(f"Error generating SQL query: {str(e)}")
-            return f"SELECT 'Error generating SQL query: {str(e)}' AS error"
-
-    def _execute_sql_query(self, query: str) -> SQLQueryResult:
-        """
-        Execute a SQL query.
-
-        Args:
-            query: SQL query to execute
-
-        Returns:
-            SQLQueryResult: Query result
-        """
-        if not self.db:
-            return SQLQueryResult(
-                query=query,
-                result=[],
-                execution_time=0,
-                row_count=0,
-                error="Database connection not available."
-            )
-
-        try:
-            # Execute query
-            start_time = time.time()
-            result = self.db.run(query)
-            execution_time = time.time() - start_time
-
-            # Parse result
-            if isinstance(result, str):
-                # Try to parse as JSON
-                try:
-                    parsed_result = json.loads(result)
-                    row_count = len(parsed_result)
-                except:
-                    parsed_result = [{"result": result}]
-                    row_count = 1
-            elif isinstance(result, list):
-                parsed_result = result
-                row_count = len(result)
-            else:
-                parsed_result = [{"result": str(result)}]
-                row_count = 1
-
-            return SQLQueryResult(
-                query=query,
-                result=parsed_result,
-                execution_time=execution_time,
-                row_count=row_count
-            )
-
-        except Exception as e:
-            print(f"Error executing SQL query: {str(e)}")
-            return SQLQueryResult(
-                query=query,
-                result=[],
-                execution_time=0,
-                row_count=0,
-                error=str(e)
-            )
+        return tools
 
     def __call__(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -410,42 +207,96 @@ class SQLRAGAgent:
         Returns:
             Dict[str, Any]: Updated state
         """
-        # Extract the message from the last message
-        message = state["messages"][-1]["content"]
+        try:
+            # Extract the query from the last message
+            if "messages" in state and isinstance(state["messages"], list) and state["messages"]:
+                if isinstance(state["messages"][-1], dict) and "content" in state["messages"][-1]:
+                    query = state["messages"][-1]["content"]
+                else:
+                    query = str(state["messages"][-1])
+            else:
+                query = state.get("query", "")
 
-        # Generate SQL query
-        query = self._generate_sql_query(message)
+            # Create input for the agent
+            agent_input = {"messages": [{"role": "user", "content": query}]}
 
-        # Execute query
-        query_result = self._execute_sql_query(query)
+            # Run the agent
+            result = self.compiled_graph.invoke(agent_input)
 
-        # Format result for the LLM
-        if query_result.error:
-            formatted_result = f"Error: {query_result.error}"
-        else:
-            formatted_result = json.dumps(query_result.result, indent=2)
+            # Update the state with the agent's response
+            if "messages" in result and result["messages"]:
+                state["messages"] = state.get("messages", [])[:-1] + result["messages"]
 
-        # Generate response using LLM
-        response = self.llm.invoke(
-            self.response_prompt.format(
-                messages=state["messages"],
-                query=query,
-                result=formatted_result
-            )
-        )
+            # Store agent outcome in the state
+            state["agent_outputs"] = state.get("agent_outputs", {})
+            state["agent_outputs"]["sql_rag"] = {
+                "result": result,
+                "query": query
+            }
 
-        # Update state
-        state["agent_outputs"]["sql_rag"] = {
-            "query": query,
-            "result": query_result.result,
-            "execution_time": query_result.execution_time,
-            "row_count": query_result.row_count,
-            "error": query_result.error
-        }
+            return state
 
-        state["messages"].append({"role": "assistant", "content": response.content})
+        except Exception as e:
+            # Handle errors gracefully
+            error_message = f"SQL RAG agent encountered an error: {str(e)}"
+            print(error_message)
 
-        return state
+            # Update state with error information
+            state["agent_outputs"] = state.get("agent_outputs", {})
+            state["agent_outputs"]["sql_rag"] = {
+                "error": str(e),
+                "has_error": True
+            }
+
+            # Add error response to messages
+            if "messages" in state:
+                state["messages"].append({
+                    "role": "assistant",
+                    "content": f"I apologize, but I encountered an error while processing your SQL query: {str(e)}. Please try again or provide a different query."
+                })
+
+            return state
+
+    async def astream(self, state: Dict[str, Any], stream_mode: str = "values") -> Any:
+        """
+        Stream the agent's response.
+
+        Args:
+            state: Current state of the system
+            stream_mode: Streaming mode (values, updates, or steps)
+
+        Yields:
+            Dict[str, Any]: Streamed response
+        """
+        try:
+            # Extract the query from the last message
+            if "messages" in state and isinstance(state["messages"], list) and state["messages"]:
+                if isinstance(state["messages"][-1], dict) and "content" in state["messages"][-1]:
+                    query = state["messages"][-1]["content"]
+                else:
+                    query = str(state["messages"][-1])
+            else:
+                query = state.get("query", "")
+
+            # Create input for the agent
+            agent_input = {"messages": [{"role": "user", "content": query}]}
+
+            # Stream the agent's response
+            for chunk in self.compiled_graph.stream(
+                agent_input,
+                stream_mode=stream_mode
+            ):
+                yield chunk
+        except Exception as e:
+            # Handle errors gracefully
+            error_message = f"Error in SQL RAG agent streaming: {str(e)}"
+            print(error_message)
+            yield {
+                "messages": [
+                    {"role": "user", "content": state.get("query", "")},
+                    {"role": "assistant", "content": f"I apologize, but I encountered an error while processing your SQL query: {str(e)}. Please try again or provide a different query."}
+                ]
+            }
 
 
 # Example usage
@@ -465,4 +316,4 @@ if __name__ == "__main__":
     }
 
     updated_state = sql_rag_agent(state)
-    print(updated_state["messages"][-1]["content"])
+    print(updated_state["messages"][-1].content if hasattr(updated_state["messages"][-1], "content") else updated_state["messages"][-1])
