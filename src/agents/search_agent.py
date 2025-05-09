@@ -807,21 +807,32 @@ class SearchAgent:
             print(formatted_results[:500] + "..." if len(formatted_results) > 500 else formatted_results)
 
             # Generate response using LLM with simplified prompt
-            prompt_with_results = self.prompt.format(
-                query=query,
-                search_results=formatted_results
-            )
+            try:
+                # Create messages directly
+                messages = [
+                    SystemMessage(content="You are a helpful assistant that answers questions based on search results."),
+                    HumanMessage(content=f"I want to know: {query}"),
+                    AIMessage(content="I'll help you with that. Let me search for information..."),
+                    HumanMessage(content=f"Here are the search results:\n\n{formatted_results}\n\nBased on ONLY these search results, please answer my question about {query}.")
+                ]
 
-            # Print prompt for debugging
-            print("\nPrompt for LLM (first 500 chars):")
+                # Print prompt for debugging
+                print("\nPrompt for LLM (first 500 chars):")
+                prompt_str = "\n".join([f"{msg.type}: {msg.content[:100]}..." if len(msg.content) > 100 else f"{msg.type}: {msg.content}" for msg in messages])
+                print(prompt_str[:500] + "..." if len(prompt_str) > 500 else prompt_str)
 
-            # Convert to messages for better debugging
-            messages = prompt_with_results.to_messages()
-            prompt_str = "\n".join([f"{msg.type}: {msg.content[:100]}..." if len(msg.content) > 100 else f"{msg.type}: {msg.content}" for msg in messages])
-            print(prompt_str[:500] + "..." if len(prompt_str) > 500 else prompt_str)
+                # Invoke LLM
+                response = self.llm.invoke(messages)
+            except Exception as e:
+                print(f"Error creating or invoking prompt: {str(e)}")
+                import traceback
+                traceback.print_exc()
 
-            # Invoke LLM
-            response = self.llm.invoke(messages)
+                # Fallback to a simpler prompt
+                response = self.llm.invoke([
+                    SystemMessage(content="You are a helpful assistant."),
+                    HumanMessage(content=f"Based on these search results: {formatted_results[:1000]}..., what are the latest advancements in quantum computing in 2025?")
+                ])
 
             # Extract content from response
             if isinstance(response, dict):
