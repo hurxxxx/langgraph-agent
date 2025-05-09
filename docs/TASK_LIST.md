@@ -44,9 +44,9 @@ This document tracks the development tasks for the multi-agent supervisor system
 - [x] Test the API with curl HTTP requests
 - [x] Verify supervisor task delegation with complex prompts
 - [x] Implement sub-graph and parallel processing techniques
-- [ ] Enhance supervisor to automatically identify parallelizable tasks in prompts
-- [ ] Implement parallel processing for independent tasks (web search, vector search)
-- [ ] Process multiple search topics in parallel when identified in a single query
+- [x] Enhance supervisor to automatically identify parallelizable tasks in prompts
+- [x] Implement parallel processing for independent tasks (web search, vector search)
+- [x] Process multiple search topics in parallel when identified in a single query
 - [ ] Optimize agent performance and response quality
 
 ## Pending Tasks
