@@ -49,6 +49,9 @@ class SearchAgentConfig(BaseModel):
     parallel_search: bool = True
     evaluate_results: bool = True
     additional_queries: bool = True
+    optimize_query: bool = True  # Whether to optimize the query before searching
+    time_period: Optional[str] = None  # Time period for search (e.g., "1d", "1w", "1m")
+    news_only: bool = False  # Whether to search only for news
     system_message: str = """
     You are a search agent that retrieves information from the web.
 
@@ -187,13 +190,19 @@ class SearchAgent:
         max_results = int(os.getenv("SEARCH_MAX_RESULTS", "5"))
         parallel_search = os.getenv("SEARCH_PARALLEL", "true").lower() == "true"
         additional_queries = os.getenv("SEARCH_ADDITIONAL_QUERIES", "true").lower() == "true"
+        optimize_query = os.getenv("SEARCH_OPTIMIZE_QUERY", "true").lower() == "true"
+        time_period = os.getenv("SEARCH_TIME_PERIOD", None)
+        news_only = os.getenv("SEARCH_NEWS_ONLY", "false").lower() == "true"
 
         return SearchAgentConfig(
             providers=providers,
             default_provider=default_provider,
             max_results=max_results,
             parallel_search=parallel_search,
-            additional_queries=additional_queries
+            additional_queries=additional_queries,
+            optimize_query=optimize_query,
+            time_period=time_period,
+            news_only=news_only
         )
 
     def _initialize_search_tool(self, provider: str) -> Any:
@@ -213,11 +222,28 @@ class SearchAgent:
                     print("Warning: TAVILY_API_KEY not found in environment")
                     return None
 
-                # Create Tavily search tool
-                tavily_tool = TavilySearchResults(
-                    api_key=api_key,
-                    max_results=self.config.max_results
-                )
+                # Create Tavily search tool with additional parameters
+                params = {
+                    "api_key": api_key,
+                    "max_results": self.config.max_results
+                }
+
+                # Add time period if specified
+                if self.config.time_period:
+                    if self.config.time_period == "1d":
+                        params["search_depth"] = "recent"
+                    elif self.config.time_period == "1w":
+                        params["search_depth"] = "moderate"
+                    else:
+                        params["search_depth"] = "deep"
+
+                # Set to news only if specified
+                if self.config.news_only:
+                    params["include_domains"] = ["news.google.com", "bbc.com", "cnn.com", "reuters.com",
+                                               "nytimes.com", "washingtonpost.com", "theguardian.com",
+                                               "apnews.com", "bloomberg.com", "ft.com", "wsj.com"]
+
+                tavily_tool = TavilySearchResults(**params)
                 print(f"Successfully initialized Tavily search tool with API key: {api_key[:5]}...")
                 return tavily_tool
             elif provider == "serper":
@@ -226,11 +252,27 @@ class SearchAgent:
                     print("Warning: SERPER_API_KEY not found in environment")
                     return None
 
-                # Create Serper search wrapper
-                search = GoogleSerperAPIWrapper(
-                    serper_api_key=api_key,
-                    k=self.config.max_results
-                )
+                # Create Serper search wrapper with additional parameters
+                params = {
+                    "serper_api_key": api_key,
+                    "k": self.config.max_results
+                }
+
+                # Add time period if specified
+                if self.config.time_period:
+                    if self.config.time_period == "1d":
+                        params["tbs"] = "qdr:d"  # Past 24 hours
+                    elif self.config.time_period == "1w":
+                        params["tbs"] = "qdr:w"  # Past week
+                    elif self.config.time_period == "1m":
+                        params["tbs"] = "qdr:m"  # Past month
+
+                # Set to news only if specified
+                if self.config.news_only:
+                    params["gl"] = "us"  # Set region to US for more news results
+                    params["search_type"] = "news"
+
+                search = GoogleSerperAPIWrapper(**params)
 
                 # Create tool from wrapper
                 serper_tool = Tool(
@@ -248,10 +290,27 @@ class SearchAgent:
                     print("Warning: GOOGLE_API_KEY or GOOGLE_CSE_ID not found in environment")
                     return None
 
-                search = GoogleSearchAPIWrapper(
-                    google_api_key=api_key,
-                    google_cse_id=cse_id
-                )
+                # Create Google search wrapper with additional parameters
+                params = {
+                    "google_api_key": api_key,
+                    "google_cse_id": cse_id
+                }
+
+                # Add time period if specified
+                if self.config.time_period:
+                    if self.config.time_period == "1d":
+                        params["dateRestrict"] = "d1"  # Past 24 hours
+                    elif self.config.time_period == "1w":
+                        params["dateRestrict"] = "w1"  # Past week
+                    elif self.config.time_period == "1m":
+                        params["dateRestrict"] = "m1"  # Past month
+
+                # Set to news only if specified
+                if self.config.news_only:
+                    params["cr"] = "countryUS"  # Set region to US for more news results
+
+                search = GoogleSearchAPIWrapper(**params)
+
                 return Tool(
                     name="Google Search",
                     description="Search Google for recent results.",
@@ -493,6 +552,64 @@ class SearchAgent:
 
         return all_results
 
+    def optimize_query(self, query: str) -> List[str]:
+        """
+        Optimize a search query to improve search results.
+
+        Args:
+            query: Original search query
+
+        Returns:
+            List[str]: List of optimized search queries
+        """
+        if not self.config.optimize_query:
+            return [query]
+
+        try:
+            # Create a prompt for query optimization
+            optimization_prompt = ChatPromptTemplate.from_messages([
+                SystemMessage(content="""
+                You are an expert at optimizing search queries. Your job is to:
+                1. Analyze the user's search intent
+                2. Extract key concepts and terms
+                3. Generate 2-3 optimized search queries that will yield better results
+
+                For news-related queries, focus on extracting specific topics, names, and events.
+                For technical queries, focus on specific technologies, problems, and solutions.
+                For general knowledge queries, focus on the core concepts and alternative phrasings.
+
+                Return ONLY the optimized queries, one per line, without any explanation or numbering.
+                """),
+                HumanMessage(content=f"Original query: {query}")
+            ])
+
+            # Generate optimized queries
+            response = self.evaluation_llm.invoke(optimization_prompt)
+
+            # Extract content from response
+            if isinstance(response, dict):
+                content = response.get("content", "")
+            elif hasattr(response, "content"):
+                content = response.content
+            else:
+                content = str(response)
+
+            # Split into individual queries
+            optimized_queries = [q.strip() for q in content.strip().split('\n') if q.strip()]
+
+            # Add the original query if no optimized queries were generated
+            if not optimized_queries:
+                optimized_queries = [query]
+            elif query not in optimized_queries:
+                optimized_queries.append(query)  # Always include the original query
+
+            print(f"Optimized queries: {optimized_queries}")
+            return optimized_queries
+
+        except Exception as e:
+            print(f"Error optimizing query: {str(e)}")
+            return [query]  # Return the original query if optimization fails
+
     def search(self, query: str, max_retries: int = 3) -> List[SearchResult]:
         """
         Perform a search using the configured providers.
@@ -513,31 +630,52 @@ class SearchAgent:
                 provider="none"
             )]
 
-        # If parallel search is enabled and we have multiple providers, use parallel search
-        if self.config.parallel_search and len(self.search_tools) > 1:
-            try:
-                # Create an event loop if one doesn't exist
-                try:
-                    loop = asyncio.get_event_loop()
-                except RuntimeError:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
+        # Optimize the query if enabled
+        if self.config.optimize_query:
+            optimized_queries = self.optimize_query(query)
+        else:
+            optimized_queries = [query]
 
-                # Run the parallel search
-                results = loop.run_until_complete(self._search_parallel(query, max_retries))
-                return results
-            except Exception as e:
-                print(f"Error in parallel search: {str(e)}")
-                print("Falling back to sequential search")
-                # Fall back to sequential search
-
-        # Sequential search with all providers
         all_results = []
-        for provider in self.search_tools.keys():
-            results = self._search_with_provider(query, provider, max_retries)
-            all_results.extend(results)
 
-        return all_results
+        # Search with each optimized query
+        for optimized_query in optimized_queries:
+            # If parallel search is enabled and we have multiple providers, use parallel search
+            if self.config.parallel_search and len(self.search_tools) > 1:
+                try:
+                    # Create an event loop if one doesn't exist
+                    try:
+                        loop = asyncio.get_event_loop()
+                    except RuntimeError:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+
+                    # Run the parallel search
+                    results = loop.run_until_complete(self._search_parallel(optimized_query, max_retries))
+                    all_results.extend(results)
+                except Exception as e:
+                    print(f"Error in parallel search: {str(e)}")
+                    print("Falling back to sequential search")
+                    # Fall back to sequential search
+                    for provider in self.search_tools.keys():
+                        results = self._search_with_provider(optimized_query, provider, max_retries)
+                        all_results.extend(results)
+            else:
+                # Sequential search with all providers
+                for provider in self.search_tools.keys():
+                    results = self._search_with_provider(optimized_query, provider, max_retries)
+                    all_results.extend(results)
+
+        # Remove duplicates based on URL
+        unique_results = []
+        seen_urls = set()
+
+        for result in all_results:
+            if result.url not in seen_urls:
+                seen_urls.add(result.url)
+                unique_results.append(result)
+
+        return unique_results
 
     def evaluate_search_results(self, query: str, results: List[SearchResult]) -> Dict[str, Any]:
         """
