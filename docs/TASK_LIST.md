@@ -163,6 +163,73 @@ This document tracks the development tasks for the multi-agent supervisor system
   - [x] Fix LangSmith client initialization error
   - [x] Add more comprehensive test cases for error scenarios
 
+## Current Improvement Tasks
+
+### Agent Refactoring with LangGraph and LangChain
+- [ ] Refactor agents using LangGraph's create_react_agent
+  - [ ] Refactor search agent to use create_react_agent
+  - [ ] Refactor SQL RAG agent to use create_react_agent
+  - [ ] Refactor vector storage agent to use create_react_agent
+  - [ ] Refactor image generation agent to use create_react_agent
+  - [ ] Refactor document generation agents to use create_react_agent
+  - [ ] Refactor MCP agent to use create_react_agent
+  - [ ] Update supervisor to work with refactored agents
+
+- [ ] Replace custom implementations with LangChain built-in tools
+  - [ ] Replace custom search implementation with LangChain's TavilySearch and GoogleSerperAPIWrapper
+  - [ ] Replace custom SQL RAG implementation with LangChain's SQLDatabaseChain or SQL agent
+  - [ ] Replace custom vector storage implementation with LangChain's vector store integrations
+  - [ ] Replace custom image generation with LangChain's image generation tools
+  - [ ] Integrate LangChain's document loaders and text splitters
+
+- [ ] Optimize agent performance with LangGraph features
+  - [ ] Implement proper state management with TypedDict
+  - [ ] Add checkpointing for conversation persistence
+  - [ ] Implement proper error handling and recovery
+  - [ ] Add tracing with LangSmith integration
+  - [ ] Implement parallel processing with LangGraph
+
+### Search Agent Enhancements
+- [x] Improve time reference handling in search queries
+  - [x] Add detection for Korean time references (오늘, 어제, 이번 주, etc.)
+  - [x] Add detection for English time references (today, yesterday, this week, etc.)
+  - [x] Automatically set appropriate time periods based on detected references
+  - [x] Add current date to queries with time references
+  - [x] Format dates appropriately for different search providers
+  - [x] Add year (2025) to queries to ensure recency
+
+- [x] Enhance content quality and quantity
+  - [x] Increase default max_results for news queries
+  - [ ] Add pagination support for search results
+  - [x] Implement result merging from multiple providers
+  - [x] Improve snippet extraction from search results
+  - [x] Add support for extracting article publication dates
+  - [x] Add support for extracting article sources
+
+- [x] Improve search result integration
+  - [x] Enhance the format of search results
+  - [x] Add metadata extraction from search results
+  - [x] Implement result filtering based on relevance and recency
+  - [x] Implement date validation for news results
+  - [x] Add source credibility assessment
+  - [x] Implement content relevance scoring
+
+### Supervisor Enhancements
+- [x] Improve task complexity assessment
+  - [x] Add specific detection for news-related queries
+  - [x] Implement language-specific handling (Korean, English, etc.)
+  - [x] Add time reference detection at the supervisor level
+
+- [x] Enhance agent selection and coordination
+  - [x] Automatically select multiple agents for news queries
+  - [x] Implement parallel search across different providers
+  - [x] Add result merging and deduplication
+
+- [x] Add specific handling for news-related queries
+  - [x] Implement a specialized news report generation workflow
+  - [x] Add section-based organization for news reports
+  - [x] Implement source credibility assessment
+
 ## Future Enhancements
 - [ ] Add support for more LLM providers
 - [x] Implement parallel agent execution
@@ -175,10 +242,11 @@ This document tracks the development tasks for the multi-agent supervisor system
 - [ ] Implement authentication and user management
 - [ ] Create plugin system for extending agent capabilities
 - [x] Develop automated agent selection based on query analysis
-- [ ] Evaluate using built-in LangChain tools instead of custom implementations
-  - [ ] Evaluate Google Serper tool for search agent
-  - [ ] Evaluate SQL Database toolkit for SQL RAG agent
-  - [ ] Evaluate vector store integrations for vector storage and retrieval agents
+- [x] Evaluate using built-in LangChain tools instead of custom implementations
+  - [x] Evaluate Google Serper tool for search agent
+  - [x] Evaluate SQL Database toolkit for SQL RAG agent
+  - [x] Evaluate vector store integrations for vector storage and retrieval agents
+  - [x] Evaluate LangGraph's create_react_agent for agent implementation
 
 ## Final Deployment Tasks
 - [ ] Set up CI/CD pipeline
