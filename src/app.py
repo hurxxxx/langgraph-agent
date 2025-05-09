@@ -19,6 +19,9 @@ from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 load_dotenv()
 
+# Import LangSmith utilities
+from utils.langsmith_utils import tracer
+
 # Import supervisor and agents
 from supervisor.supervisor import Supervisor, SupervisorConfig
 from supervisor.parallel_supervisor import ParallelSupervisor, ParallelSupervisorConfig
@@ -28,14 +31,20 @@ from agents.image_generation_agent import ImageGenerationAgent, ImageGenerationA
 from agents.quality_agent import QualityAgent, QualityAgentConfig
 from agents.sql_rag_agent import SQLRAGAgent, SQLRAGAgentConfig
 from agents.vector_retrieval_agent import VectorRetrievalAgent, VectorRetrievalAgentConfig
+from agents.reranking_agent import RerankingAgent, RerankingAgentConfig
 
 # Import document generation agents
 from agents.document_generation import (
     BaseDocumentAgent, BaseDocumentAgentConfig,
     ReportWriterAgent, ReportWriterAgentConfig,
-    BlogWriterAgent, BlogWriterAgentConfig,
+    BlogWriterAgent, BlogWriterAgentConfig
+)
+from agents.document_generation_part2 import (
     AcademicWriterAgent, AcademicWriterAgentConfig,
     ProposalWriterAgent, ProposalWriterAgentConfig
+)
+from agents.planning_document_agent import (
+    PlanningDocumentAgent, PlanningDocumentAgentConfig
 )
 
 
@@ -70,6 +79,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Add static files
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+import os
+
+# Mount static files directory if it exists
+static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "src", "ui")
+if os.path.exists(static_dir):
+    app.mount("/ui", StaticFiles(directory=static_dir), name="ui")
 
 
 # Initialize agents
@@ -165,6 +184,25 @@ def initialize_agents():
         )
     )
 
+    # Initialize reranking agent
+    reranking_agent = RerankingAgent(
+        config=RerankingAgentConfig(
+            provider="cohere",  # Use Cohere as the default reranking provider
+            cohere_model="rerank-english-v3.0",
+            cohere_top_n=5,
+            use_cache=True,
+            cache_ttl=3600
+        )
+    )
+
+    # Initialize planning document agent
+    planning_document_agent = PlanningDocumentAgent(
+        config=PlanningDocumentAgentConfig(
+            documents_dir="./generated_documents/plans",
+            metadata_dir="./generated_documents/plans/metadata"
+        )
+    )
+
     # Return dictionary of agents
     return {
         "search_agent": search_agent,
@@ -173,10 +211,12 @@ def initialize_agents():
         "quality_agent": quality_agent,
         "sql_rag_agent": sql_rag_agent,
         "vector_retrieval_agent": vector_retrieval_agent,
+        "reranking_agent": reranking_agent,
         "report_writer_agent": report_writer_agent,
         "blog_writer_agent": blog_writer_agent,
         "academic_writer_agent": academic_writer_agent,
-        "proposal_writer_agent": proposal_writer_agent
+        "proposal_writer_agent": proposal_writer_agent,
+        "planning_document_agent": planning_document_agent
     }
 
 
@@ -201,6 +241,7 @@ standard_supervisor = Supervisor(
         - search_agent: For web searches and information retrieval using Serper (Google Search API)
         - vector_storage_agent: For storing documents in vector databases
         - vector_retrieval_agent: For retrieving documents from vector databases based on semantic similarity
+        - reranking_agent: For reranking search results or vector search results based on relevance
         - image_generation_agent: For creating images based on descriptions
         - quality_agent: For evaluating the quality of responses
         - sql_rag_agent: For querying databases and providing insights from data
@@ -208,6 +249,7 @@ standard_supervisor = Supervisor(
         - blog_writer_agent: For creating blog posts and articles with different tones and styles
         - academic_writer_agent: For writing academic papers with proper citations and formatting
         - proposal_writer_agent: For creating business proposals with budgets and timelines
+        - planning_document_agent: For creating project plans and specifications with timelines and resource allocation
 
         Always think carefully about which agent(s) would be most appropriate for the task.
         You can use multiple agents in sequence or in parallel if needed.
@@ -235,6 +277,7 @@ parallel_supervisor = ParallelSupervisor(
         - search_agent: For web searches and information retrieval using Serper (Google Search API)
         - vector_storage_agent: For storing documents in vector databases
         - vector_retrieval_agent: For retrieving documents from vector databases based on semantic similarity
+        - reranking_agent: For reranking search results or vector search results based on relevance
         - image_generation_agent: For creating images based on descriptions
         - quality_agent: For evaluating the quality of responses
         - sql_rag_agent: For querying databases and providing insights from data
@@ -242,6 +285,7 @@ parallel_supervisor = ParallelSupervisor(
         - blog_writer_agent: For creating blog posts and articles with different tones and styles
         - academic_writer_agent: For writing academic papers with proper citations and formatting
         - proposal_writer_agent: For creating business proposals with budgets and timelines
+        - planning_document_agent: For creating project plans and specifications with timelines and resource allocation
 
         You can run agents in parallel when appropriate to save time.
         """
@@ -254,6 +298,21 @@ supervisor = parallel_supervisor
 
 
 # Define API endpoints
+@app.get("/")
+async def get_monitor_ui():
+    """
+    Serve the agent monitor UI.
+
+    Returns:
+        FileResponse: The agent monitor HTML file
+    """
+    monitor_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "src", "ui", "agent_monitor.html")
+    if os.path.exists(monitor_path):
+        return FileResponse(monitor_path)
+    else:
+        return {"error": "Monitor UI not found"}
+
+
 @app.post("/query", response_model=QueryResponse)
 async def process_query(request: QueryRequest):
     """
@@ -294,14 +353,23 @@ async def process_query(request: QueryRequest):
             if request.context:
                 result["context"] = request.context
 
+            # Get LangSmith run ID if available
+            langsmith_metadata = {
+                "stream": False,
+                "query": request.query,
+                "supervisor_type": "parallel" if request.use_parallel else "standard"
+            }
+
+            if hasattr(tracer, "client") and tracer.client:
+                langsmith_metadata.update({
+                    "langsmith_project": tracer.project_name,
+                    "langsmith_run_id": "latest"  # In a real implementation, we would capture the actual run ID
+                })
+
             return QueryResponse(
                 response=final_response,
                 agent_trace=result.get("agent_outputs", {}),
-                metadata={
-                    "stream": False,
-                    "query": request.query,
-                    "supervisor_type": "parallel" if request.use_parallel else "standard"
-                }
+                metadata=langsmith_metadata
             )
     except Exception as e:
         import traceback
@@ -424,6 +492,13 @@ async def stream_response(request: QueryRequest) -> Iterator[str]:
             final_response = selected_supervisor._synthesize_response(request.query, parallel_state)
             parallel_state["final_response"] = final_response
             parallel_state["messages"].append({"role": "assistant", "content": final_response})
+
+            # Add LangSmith metadata if available
+            if hasattr(tracer, "client") and tracer.client:
+                parallel_state["metadata"] = {
+                    "langsmith_project": tracer.project_name,
+                    "langsmith_run_id": "latest"  # In a real implementation, we would capture the actual run ID
+                }
 
             # Yield final state
             yield f"data: {json.dumps(parallel_state)}\n\n"

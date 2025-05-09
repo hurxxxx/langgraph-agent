@@ -8,13 +8,17 @@ The supervisor is responsible for:
 3. Coordinating communication between agents
 4. Synthesizing final responses
 
-The implementation supports both streaming and non-streaming responses.
+The implementation supports both streaming and non-streaming responses and includes
+LangSmith tracing for monitoring and debugging.
 """
 
 import os
 import json
 import time
 from typing import Dict, List, Any, Optional, Callable
+
+# Import LangSmith utilities
+from utils.langsmith_utils import tracer
 
 # Import LangChain components
 try:
@@ -259,6 +263,7 @@ class Supervisor:
         else:
             return str(response)
 
+    @tracer.trace_supervisor("StandardSupervisor")
     def invoke(self, query, stream=False):
         """
         Process a user query using the multi-agent system.
@@ -280,6 +285,7 @@ class Supervisor:
 
         # Determine which agent to use
         agent_name = self._determine_next_agent(query)
+        state["next_agent"] = agent_name
 
         # If no agent is appropriate, generate a response directly
         if agent_name is None:

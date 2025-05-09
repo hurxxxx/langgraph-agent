@@ -1,0 +1,20 @@
+{
+  "title": "Untitled Document",
+  "sections": [
+    "Abstract",
+    "Introduction",
+    "Literature Review",
+    "Methodology",
+    "Results",
+    "Discussion",
+    "Conclusion",
+    "References"
+  ],
+  "style": "default",
+  "include_toc": false,
+  "include_references": false,
+  "include_appendices": false,
+  "word_count": 652,
+  "created_at": 1746773187.4204834,
+  "file_path": "/home/edward/Documents/augment-projects/langgraph-agent/generated_documents/academic/untitled_document_1746773187_f844a0b4.md"
+}

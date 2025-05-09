@@ -7,14 +7,35 @@ This module implements an image generation agent that can create images using:
 - Other image generation services
 
 The agent supports different image generation providers and can be configured
-to use different models and parameters.
+to use different models and parameters. It also supports saving generated images
+to local storage for verification and future use.
 """
 
 import os
 import base64
 import requests
+import json
+import time
 from typing import Dict, List, Any, Optional, Literal, Union
 from pydantic import BaseModel, Field
+from pathlib import Path
+
+# Import utility functions
+# Import utility functions
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+from src.utils.file_operations import (
+    ensure_directory_exists,
+    download_file,
+    save_metadata,
+    load_metadata,
+    generate_unique_filename,
+    verify_file_exists,
+    get_file_size,
+    get_file_extension
+)
 
 # Import LangChain components
 try:
@@ -60,6 +81,11 @@ class ImageGenerationResult(BaseModel):
     prompt: str
     model: str
     size: str
+    local_path: Optional[str] = None
+    file_size: Optional[int] = None
+    created_at: Optional[float] = None
+    metadata_path: Optional[str] = None
+    verified: bool = False
 
 
 class ImageGenerationAgentConfig(BaseModel):
@@ -71,14 +97,21 @@ class ImageGenerationAgentConfig(BaseModel):
     streaming: bool = True
     image_size: str = "1024x1024"
     image_quality: str = "standard"
+    # File storage configuration
+    save_images: bool = True
+    images_dir: str = "./generated_images"
+    metadata_dir: str = "./generated_images/metadata"
+    verify_downloads: bool = True
+    download_timeout: int = 30
     system_message: str = """
     You are an image generation agent that creates images based on descriptions.
     Your job is to:
     1. Understand the image description
     2. Generate an appropriate image
     3. Provide the image URL and any relevant details
+    4. Save the image locally for verification and future use
 
-    Always confirm what image was generated and provide the image URL.
+    Always confirm what image was generated and provide both the image URL and local file path.
     """
 
 
@@ -122,6 +155,13 @@ class ImageGenerationAgent:
             SystemMessage(content="Image generation results: {generation_results}")
         ])
 
+        # Ensure image and metadata directories exist
+        if self.config.save_images:
+            self.images_dir = ensure_directory_exists(self.config.images_dir)
+            self.metadata_dir = ensure_directory_exists(self.config.metadata_dir)
+            print(f"Image generation agent initialized with image directory: {self.images_dir}")
+            print(f"Image generation agent initialized with metadata directory: {self.metadata_dir}")
+
     def _extract_image_description(self, message: str) -> str:
         """
         Extract the image description from the message.
@@ -146,6 +186,86 @@ class ImageGenerationAgent:
             # If no pattern is found, use the whole message
             return message
 
+    def _save_image_locally(self, image_url: str, prompt: str, model: str, size: str) -> Dict[str, Any]:
+        """
+        Save an image from a URL to local storage.
+
+        Args:
+            image_url: URL of the image
+            prompt: Image generation prompt
+            model: Model used to generate the image
+            size: Size of the generated image
+
+        Returns:
+            Dict[str, Any]: Information about the saved image
+        """
+        if not self.config.save_images:
+            return {
+                "local_path": None,
+                "file_size": None,
+                "created_at": time.time(),
+                "metadata_path": None,
+                "verified": False
+            }
+
+        try:
+            # Generate a unique filename
+            extension = get_file_extension(image_url)
+            local_path = generate_unique_filename(
+                self.images_dir,
+                prefix=f"{model.replace('-', '_')}",
+                extension=extension
+            )
+
+            # Download the image
+            download_file(image_url, local_path, timeout=self.config.download_timeout)
+
+            # Verify the file exists and get its size
+            if verify_file_exists(local_path):
+                file_size = get_file_size(local_path)
+                verified = True
+            else:
+                file_size = 0
+                verified = False
+
+            # Create metadata
+            created_at = time.time()
+            metadata = {
+                "prompt": prompt,
+                "model": model,
+                "size": size,
+                "image_url": image_url,
+                "local_path": local_path,
+                "file_size": file_size,
+                "created_at": created_at,
+                "verified": verified
+            }
+
+            # Save metadata
+            metadata_path = os.path.join(
+                self.metadata_dir,
+                f"{os.path.basename(local_path).split('.')[0]}.json"
+            )
+            save_metadata(metadata, metadata_path)
+
+            return {
+                "local_path": local_path,
+                "file_size": file_size,
+                "created_at": created_at,
+                "metadata_path": metadata_path,
+                "verified": verified
+            }
+        except Exception as e:
+            print(f"Error saving image locally: {str(e)}")
+            return {
+                "local_path": None,
+                "file_size": None,
+                "created_at": time.time(),
+                "metadata_path": None,
+                "verified": False,
+                "error": str(e)
+            }
+
     def generate_image_dalle(self, prompt: str) -> ImageGenerationResult:
         """
         Generate an image using DALL-E.
@@ -162,12 +282,31 @@ class ImageGenerationAgent:
         # Simulate a response
         image_url = "https://example.com/generated_image.png"
 
-        return ImageGenerationResult(
+        # Create the basic result
+        result = ImageGenerationResult(
             image_url=image_url,
             prompt=prompt,
             model=self.config.dalle_model,
             size=self.config.image_size
         )
+
+        # Save the image locally if configured
+        if self.config.save_images:
+            save_result = self._save_image_locally(
+                image_url=image_url,
+                prompt=prompt,
+                model=self.config.dalle_model,
+                size=self.config.image_size
+            )
+
+            # Update the result with local file information
+            result.local_path = save_result.get("local_path")
+            result.file_size = save_result.get("file_size")
+            result.created_at = save_result.get("created_at")
+            result.metadata_path = save_result.get("metadata_path")
+            result.verified = save_result.get("verified", False)
+
+        return result
 
     def generate_image_gpt4o(self, prompt: str) -> ImageGenerationResult:
         """
@@ -191,12 +330,31 @@ class ImageGenerationAgent:
         # from the response based on the actual API
         image_url = "https://example.com/generated_image.png"
 
-        return ImageGenerationResult(
+        # Create the basic result
+        result = ImageGenerationResult(
             image_url=image_url,
             prompt=prompt,
             model=self.config.gpt4o_model,
             size=self.config.image_size
         )
+
+        # Save the image locally if configured
+        if self.config.save_images:
+            save_result = self._save_image_locally(
+                image_url=image_url,
+                prompt=prompt,
+                model=self.config.gpt4o_model,
+                size=self.config.image_size
+            )
+
+            # Update the result with local file information
+            result.local_path = save_result.get("local_path")
+            result.file_size = save_result.get("file_size")
+            result.created_at = save_result.get("created_at")
+            result.metadata_path = save_result.get("metadata_path")
+            result.verified = save_result.get("verified", False)
+
+        return result
 
     def generate_image(self, prompt: str) -> ImageGenerationResult:
         """
@@ -243,6 +401,14 @@ class ImageGenerationAgent:
             Size: {result.size}
             Image URL: {result.image_url}
             """
+
+            # Add local file information if available
+            if result.local_path:
+                formatted_result += f"""
+                Local File Path: {result.local_path}
+                File Size: {result.file_size} bytes
+                Verified: {result.verified}
+                """
 
             error = None
         except Exception as e:

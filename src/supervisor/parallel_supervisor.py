@@ -3,6 +3,8 @@ Parallel Supervisor for Multi-Agent System
 
 This module implements a supervisor agent that can orchestrate multiple specialized agents
 in parallel using a simpler approach without complex graph structures.
+
+Includes LangSmith tracing for monitoring and debugging.
 """
 
 import os
@@ -11,6 +13,9 @@ import time
 import concurrent.futures
 from typing import Dict, List, Any, Optional, Literal
 from pydantic import BaseModel
+
+# Import LangSmith utilities
+from utils.langsmith_utils import tracer
 
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
@@ -375,9 +380,16 @@ class ParallelSupervisor:
             "subtasks": []
         }
 
-        # Execute the agent
+        # Execute the agent with LangSmith tracing
         try:
+            # Get the agent function
             agent = self.agents[agent_name]
+
+            # Wrap the agent with tracing if it's not already wrapped
+            if not hasattr(agent, "__wrapped__"):
+                agent = tracer.trace_agent(agent_name)(agent)
+
+            # Execute the agent
             updated_state = agent(agent_state)
 
             # Extract the agent's output
@@ -444,6 +456,7 @@ class ParallelSupervisor:
 
         return content
 
+    @tracer.trace_supervisor("ParallelSupervisor")
     def invoke(self, query: str, stream: bool = False) -> Dict[str, Any]:
         """
         Process a user query using the multi-agent system with intelligent parallelization.

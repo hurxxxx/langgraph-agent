@@ -1,15 +1,17 @@
 # Core dependencies
 langgraph>=0.3.0
 langchain>=0.1.0
-langchain-core>=0.1.0
+langchain-core>=0.1.14
 langchain-openai>=0.0.5
 langchain-anthropic>=0.1.0
-langchain-community>=0.0.10
+langchain-community>=0.0.16
 langchain-experimental>=0.0.40
+langchain-cohere>=0.1.0
 
 # LLM providers
 openai>=1.10.0
 anthropic>=0.8.0
+cohere>=4.37
 
 # Vector stores
 chromadb>=0.4.18
@@ -17,11 +19,15 @@ qdrant-client>=1.8.0
 pymilvus>=2.3.0
 psycopg2-binary>=2.9.9  # For pgvector
 meilisearch>=1.5.0
+pinecone-client>=2.2.4
 
 # Web framework
-fastapi>=0.104.0
-uvicorn>=0.23.2
+fastapi>=0.109.2
+uvicorn>=0.27.1
 pydantic>=2.4.2
+
+# Monitoring and tracing
+langsmith>=0.1.0
 
 # Utilities
 python-dotenv>=1.0.0

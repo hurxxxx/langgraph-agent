@@ -1,0 +1,20 @@
+{
+  "title": "Untitled Document",
+  "sections": [
+    "Executive Summary",
+    "Introduction",
+    "Background",
+    "Methodology",
+    "Findings",
+    "Analysis",
+    "Recommendations",
+    "Conclusion"
+  ],
+  "style": "default",
+  "include_toc": false,
+  "include_references": false,
+  "include_appendices": false,
+  "word_count": 628,
+  "created_at": 1746773114.7487178,
+  "file_path": "/home/edward/Documents/augment-projects/langgraph-agent/generated_documents/reports/untitled_document_1746773114_0c555d7d.md"
+}
