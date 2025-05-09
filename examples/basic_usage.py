@@ -1,19 +1,12 @@
-"""
-Basic Usage Example for Multi-Agent Supervisor System
-
-This script demonstrates how to use the multi-agent supervisor system
-for processing queries with both streaming and non-streaming responses.
-"""
+"""Basic Usage Example for Multi-Agent Supervisor System"""
 
 import os
 import sys
 import json
 from dotenv import load_dotenv
 
-# Add the src directory to the path
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
-# Import supervisor and agents
 from src.supervisor.supervisor import Supervisor, SupervisorConfig
 from src.agents.search_agent import SearchAgent, SearchAgentConfig
 from src.agents.vector_storage_agent import VectorStorageAgent, VectorStorageAgentConfig
@@ -22,21 +15,14 @@ from src.agents.quality_agent import QualityAgent, QualityAgentConfig
 
 
 def initialize_agents():
-    """
-    Initialize all specialized agents.
-
-    Returns:
-        Dict: Dictionary of agent functions keyed by agent name
-    """
-    # Initialize search agent with Serper
+    """Initialize all specialized agents."""
     search_agent = SearchAgent(
         config=SearchAgentConfig(
-            provider="serper",  # Use Serper as the search provider
+            provider="serper",
             max_results=3
         )
     )
 
-    # Initialize vector storage agent
     vector_storage_agent = VectorStorageAgent(
         config=VectorStorageAgentConfig(
             store_type="chroma",
@@ -45,7 +31,6 @@ def initialize_agents():
         )
     )
 
-    # Initialize image generation agent
     image_generation_agent = ImageGenerationAgent(
         config=ImageGenerationAgentConfig(
             provider="dalle",
@@ -54,12 +39,10 @@ def initialize_agents():
         )
     )
 
-    # Initialize quality agent
     quality_agent = QualityAgent(
         config=QualityAgentConfig()
     )
 
-    # Return dictionary of agents
     return {
         "search_agent": search_agent,
         "vector_storage_agent": vector_storage_agent,
@@ -69,26 +52,16 @@ def initialize_agents():
 
 
 def non_streaming_example(supervisor, query):
-    """
-    Example of using the supervisor with a non-streaming response.
-
-    Args:
-        supervisor: Initialized supervisor
-        query: Query to process
-    """
+    """Example of using the supervisor with a non-streaming response."""
     print("\n=== Non-Streaming Example ===")
     print(f"Query: {query}")
 
-    # Process query
     result = supervisor.invoke(query=query, stream=False)
-
-    # Extract the final response
     final_message = result["messages"][-1]["content"] if result["messages"] else ""
 
     print("\nResponse:")
     print(final_message)
 
-    # Print agent outputs
     if "agent_outputs" in result:
         print("\nAgent Outputs:")
         for agent_name, output in result["agent_outputs"].items():
@@ -96,21 +69,11 @@ def non_streaming_example(supervisor, query):
 
 
 def streaming_example(supervisor, query):
-    """
-    Example of using the supervisor with a streaming response.
-
-    Args:
-        supervisor: Initialized supervisor
-        query: Query to process
-    """
+    """Example of using the supervisor with a streaming response."""
     print("\n=== Streaming Example ===")
     print(f"Query: {query}")
-
     print("\nResponse (streaming):")
 
-    # Process query with streaming
-    # Note: The current implementation doesn't actually stream chunks
-    # It just returns the final state with stream=True
     result = supervisor.invoke(query=query, stream=True)
 
     print("\nFinal Result:")
@@ -120,7 +83,6 @@ def streaming_example(supervisor, query):
             print(f"Role: {message.get('role', 'unknown')}")
             print(f"Content: {message.get('content', '')}")
 
-    # Print agent outputs
     if "agent_outputs" in result:
         print("\nAgent Outputs:")
         for agent_name, output in result["agent_outputs"].items():
@@ -129,13 +91,9 @@ def streaming_example(supervisor, query):
 
 def main():
     """Main function to run the examples."""
-    # Load environment variables
     load_dotenv()
-
-    # Initialize agents
     agents = initialize_agents()
 
-    # Initialize supervisor
     supervisor = Supervisor(
         config=SupervisorConfig(
             llm_provider="openai",
@@ -145,7 +103,6 @@ def main():
         agents=agents
     )
 
-    # Example queries for testing with real-world scenarios
     queries = [
         "What are the latest advancements in quantum computing?",
         "Generate an image of a futuristic city with flying cars.",
@@ -154,13 +111,10 @@ def main():
         "How do large language models like GPT-4 work?"
     ]
 
-    # Run non-streaming examples for search queries
-    non_streaming_example(supervisor, queries[0])  # Quantum computing
-    non_streaming_example(supervisor, queries[3])  # Climate change
-    non_streaming_example(supervisor, queries[4])  # LLMs
-
-    # Run streaming example
-    streaming_example(supervisor, queries[1])  # Image generation
+    non_streaming_example(supervisor, queries[0])
+    non_streaming_example(supervisor, queries[3])
+    non_streaming_example(supervisor, queries[4])
+    streaming_example(supervisor, queries[1])
 
 
 if __name__ == "__main__":

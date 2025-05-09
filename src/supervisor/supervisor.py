@@ -1,15 +1,9 @@
 """
-Simplified Supervisor Agent for Multi-Agent System
+Supervisor Agent for Multi-Agent System
 
-This module implements a simplified supervisor agent that orchestrates multiple specialized agents.
-The supervisor is responsible for:
-1. Understanding user queries
-2. Delegating tasks to appropriate specialized agents
-3. Coordinating communication between agents
-4. Synthesizing final responses
-
-The implementation supports both streaming and non-streaming responses and includes
-LangSmith tracing for monitoring and debugging.
+This module implements a supervisor agent that orchestrates multiple specialized agents.
+The supervisor is responsible for understanding user queries, delegating tasks to appropriate
+specialized agents, coordinating communication between agents, and synthesizing final responses.
 """
 
 import os
@@ -21,29 +15,8 @@ from typing import Dict, List, Any, Optional, Callable
 from utils.langsmith_utils import tracer
 
 # Import LangChain components
-try:
-    from langchain_openai import ChatOpenAI
-    from langchain_anthropic import ChatAnthropic
-except ImportError:
-    print("Warning: LangChain components not available. Using mock implementations.")
-    # Mock implementations for testing
-    class ChatOpenAI:
-        def __init__(self, model=None, temperature=0, streaming=False):
-            self.model = model
-            self.temperature = temperature
-            self.streaming = streaming
-
-        def invoke(self, messages):
-            return {"content": f"Response from {self.model} about {messages[-1]['content']}"}
-
-    class ChatAnthropic:
-        def __init__(self, model=None, temperature=0, streaming=False):
-            self.model = model
-            self.temperature = temperature
-            self.streaming = streaming
-
-        def invoke(self, messages):
-            return {"content": f"Response from {self.model} about {messages[-1]['content']}"}
+from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
 
 
 class SupervisorConfig:
@@ -98,50 +71,20 @@ class Supervisor:
         self.agents = agents or {}
 
         # Initialize LLM based on provider
-        try:
-            if self.config.llm_provider == "openai":
-                self.llm = ChatOpenAI(
-                    model=self.config.openai_model,
-                    temperature=self.config.temperature,
-                    streaming=self.config.streaming
-                )
-            elif self.config.llm_provider == "anthropic":
-                self.llm = ChatAnthropic(
-                    model=self.config.anthropic_model,
-                    temperature=self.config.temperature,
-                    streaming=self.config.streaming
-                )
-            else:
-                raise ValueError(f"Unsupported LLM provider: {self.config.llm_provider}")
-        except Exception as e:
-            print(f"Warning: Could not initialize LLM: {str(e)}")
-            # Use a mock implementation
-            class MockLLM:
-                def __init__(self):
-                    self.content = "This is a mock response from the supervisor."
-
-                def invoke(self, messages):
-                    # Simple logic to determine which agent to use based on the query
-                    query = ""
-                    for msg in messages:
-                        if isinstance(msg, dict) and msg.get("role") == "user":
-                            query = msg.get("content", "")
-                        elif hasattr(msg, "content"):
-                            if getattr(msg, "role", "") == "user":
-                                query = msg.content
-
-                    if "search" in query.lower() or "find" in query.lower() or "what is" in query.lower():
-                        return {"content": "I'll use the search_agent to find information about this."}
-                    elif "image" in query.lower() or "picture" in query.lower() or "generate" in query.lower():
-                        return {"content": "I'll use the image_generation_agent to create an image."}
-                    elif "store" in query.lower() or "save" in query.lower() or "database" in query.lower():
-                        return {"content": "I'll use the vector_storage_agent to store this information."}
-                    elif "quality" in query.lower() or "evaluate" in query.lower() or "assess" in query.lower():
-                        return {"content": "I'll use the quality_agent to evaluate this."}
-                    else:
-                        return {"content": "I'll handle this query directly. " + query}
-
-            self.llm = MockLLM()
+        if self.config.llm_provider == "openai":
+            self.llm = ChatOpenAI(
+                model=self.config.openai_model,
+                temperature=self.config.temperature,
+                streaming=self.config.streaming
+            )
+        elif self.config.llm_provider == "anthropic":
+            self.llm = ChatAnthropic(
+                model=self.config.anthropic_model,
+                temperature=self.config.temperature,
+                streaming=self.config.streaming
+            )
+        else:
+            raise ValueError(f"Unsupported LLM provider: {self.config.llm_provider}")
 
     def _determine_next_agent(self, query):
         """
@@ -175,23 +118,7 @@ class Supervisor:
         else:
             agent_name = str(response).strip().lower()
 
-        # Simple keyword matching for mock mode
-        if "search" in query.lower() or "find" in query.lower() or "what is" in query.lower():
-            for name in self.agents.keys():
-                if "search" in name.lower():
-                    return name
-        elif "image" in query.lower() or "picture" in query.lower() or "generate" in query.lower():
-            for name in self.agents.keys():
-                if "image" in name.lower():
-                    return name
-        elif "store" in query.lower() or "save" in query.lower() or "database" in query.lower():
-            for name in self.agents.keys():
-                if "vector" in name.lower() or "storage" in name.lower():
-                    return name
-        elif "quality" in query.lower() or "evaluate" in query.lower() or "assess" in query.lower():
-            for name in self.agents.keys():
-                if "quality" in name.lower():
-                    return name
+
 
         # Check if the agent exists based on LLM response
         for name in self.agents.keys():
@@ -318,22 +245,4 @@ class Supervisor:
             return updated_state
 
 
-# Example usage
-if __name__ == "__main__":
-    # This is just a placeholder for testing
-    def search_agent(state):
-        # Simulate search agent
-        query = state["messages"][-1]["content"]
-        state["agent_outputs"]["search"] = {"results": [f"Search result for {query}"]}
-        state["messages"].append({"role": "assistant", "content": f"Found information about {query}"})
-        return state
 
-    # Create supervisor with mock agents
-    supervisor = Supervisor(
-        config=SupervisorConfig(),
-        agents={"search_agent": search_agent}
-    )
-
-    # Test with a query
-    result = supervisor.invoke("Tell me about the history of AI", stream=False)
-    print(result["messages"][-1]["content"])

@@ -8,25 +8,9 @@ As of May 2025, the latest version of LangGraph is 0.3.x, which introduced prebu
 
 ## Key Features
 
-### Functional API
-Introduced in January 2025, the Functional API provides a more intuitive way to define LangGraph workflows. It allows for:
-- More declarative workflow definitions
-- Easier composition of complex workflows
-- Better type checking and IDE support
-- Simplified streaming implementation
-
-### Streaming Support
-LangGraph has first-class support for streaming, allowing for:
-- Real-time updates from agents
-- Progressive rendering of responses
-- Improved user experience for long-running tasks
-
-### Multi-Agent Architecture
-LangGraph supports various multi-agent architectures:
-1. **Supervisor Architecture**: A central agent controls all communication and delegates tasks
-2. **Tool-Calling Supervisor**: Specialized agents are represented as tools for the supervisor
-3. **Peer-to-Peer**: Agents communicate directly with each other
-4. **Human-in-the-Loop**: Incorporates human feedback into the agent workflow
+- **Functional API**: More intuitive workflow definitions with better type checking
+- **Streaming Support**: Real-time updates from agents and progressive rendering
+- **Multi-Agent Architectures**: Supervisor, Tool-Calling, Peer-to-Peer, and Human-in-the-Loop
 
 ## Core Concepts
 
@@ -35,7 +19,7 @@ Graphs define the flow of information between nodes (agents or functions) in a L
 
 ```python
 from langgraph.graph import StateGraph
-from typing import TypedDict, Annotated
+from typing import TypedDict
 
 # Define state
 class State(TypedDict):
@@ -44,35 +28,23 @@ class State(TypedDict):
 
 # Create graph
 graph = StateGraph(State)
-
-# Add nodes
 graph.add_node("agent_1", agent_1_function)
 graph.add_node("agent_2", agent_2_function)
-
-# Define edges
 graph.add_edge("agent_1", "agent_2")
-
-# Compile
 app = graph.compile()
 ```
 
 ### State Management
-LangGraph provides robust state management capabilities:
 - Typed state definitions
 - Immutable state updates
 - State history tracking
-- Checkpointing and resumption
 
 ### Prebuilt Agents
-LangGraph 0.3 introduced prebuilt agents for common use cases:
 - Assistant agents
 - Tool-using agents
 - Supervisor agents
-- Custom agent creation
 
 ## Integration with LangChain
-
-LangGraph is designed to work seamlessly with LangChain components:
 - LangChain tools can be used directly in LangGraph nodes
 - LangChain chains can be incorporated as nodes
 - LangChain retrievers can be used for RAG applications
@@ -80,7 +52,6 @@ LangGraph is designed to work seamlessly with LangChain components:
 ## Best Practices
 
 ### Supervisor Implementation
-For implementing a supervisor agent:
 
 ```python
 from langgraph.graph import StateGraph
@@ -94,8 +65,7 @@ class AgentState(TypedDict):
 # Create supervisor
 supervisor = SupervisorAgent.from_llm(
     llm=ChatOpenAI(model="gpt-4o", temperature=0),
-    agents={"search": search_agent, "writer": writer_agent},
-    tools=[tool1, tool2]
+    agents={"search": search_agent, "writer": writer_agent}
 )
 
 # Create graph
@@ -114,10 +84,8 @@ graph.add_conditional_edges(
 graph.add_edge("search", "supervisor")
 graph.add_edge("writer", "supervisor")
 
-# Set entry point
+# Set entry point and compile
 graph.set_entry_point("supervisor")
-
-# Compile
 app = graph.compile()
 ```
 
@@ -129,20 +97,10 @@ app_streaming = graph.compile(streaming=True)
 
 # Use the app with streaming
 for chunk in app_streaming.stream({"messages": [user_message]}):
-    print(chunk)  # Process each chunk as it arrives
+    print(chunk)
 ```
-
-## Recent Updates (2025)
-
-- **Functional API**: More intuitive way to define workflows
-- **Enhanced Streaming**: Improved streaming capabilities for real-time feedback
-- **Prebuilt Agents**: Ready-to-use agent implementations
-- **Human Feedback Integration**: Better support for human-in-the-loop workflows
-- **Performance Optimizations**: Faster execution and reduced latency
-- **TypeScript Support**: Improved support for TypeScript applications
 
 ## Resources
 - [LangGraph Documentation](https://langchain-ai.github.io/langgraph/)
 - [LangGraph Tutorials](https://langchain-ai.github.io/langgraph/tutorials/)
-- [LangGraph Blog](https://blog.langchain.dev/tag/langgraph/)
 - [GitHub Repository](https://github.com/langchain-ai/langgraph)

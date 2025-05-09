@@ -8,7 +8,6 @@ This catalog lists all the documentation created for the multi-agent supervisor 
 |----------|------|-------------|
 | Product Requirements Document | `docs/PRD.md` | Outlines the requirements and specifications for the multi-agent supervisor system, including project goals, technical requirements, and success criteria. |
 | Task List | `docs/TASK_LIST.md` | Tracks development tasks, including completed, in-progress, and pending tasks. |
-| Test Results | `docs/test_results.md` | Records the results of testing the implementation with real API keys and real-world queries, including observations and next steps. |
 | README | `README.md` | Provides an overview of the project, installation instructions, usage examples, and links to detailed documentation. |
 
 ## Learning Resources
@@ -21,7 +20,7 @@ This catalog lists all the documentation created for the multi-agent supervisor 
 | OpenAPI Integration | `docs/learning/openapi_integration.md` | Explains how to integrate OpenAPI specifications with LangGraph to create standardized APIs for agent interactions. |
 | Streaming Support | `docs/learning/streaming_support.md` | Details how to implement streaming responses in a multi-agent system built with LangGraph, including both server and client implementations. |
 | Serper API Integration | `docs/learning/serper_integration.md` | Provides information about integrating Serper API with LangGraph for web search capabilities, including API reference and best practices. |
-| Mock Implementation | `docs/learning/mock_implementation.md` | Explains the mock implementation used for development and testing without requiring API keys, including mock LLMs, search tools, vector storage, and image generation. |
+
 
 ## Code Documentation
 
@@ -45,7 +44,7 @@ This catalog lists all the documentation created for the multi-agent supervisor 
 | Web Client | `examples/web_client.html` | Provides a simple HTML/JavaScript client for interacting with the multi-agent supervisor API. |
 | Agent Monitor UI | `src/ui/agent_monitor.html` | Enhanced UI for testing and monitoring agent execution with LangSmith integration. |
 | Monitor Runner | `run_monitor.py` | Script to run the application with the monitoring UI in a web browser. |
-| Supervisor Serper Test | `tests/test_supervisor_serper.py` | Tests the supervisor agent's ability to delegate tasks to the search agent using Serper for web search. |
+
 
 ## Configuration
 
