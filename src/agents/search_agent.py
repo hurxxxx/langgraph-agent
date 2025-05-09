@@ -148,7 +148,7 @@ class SearchAgent:
         self.prompt = ChatPromptTemplate.from_messages([
             SystemMessage(content=config.system_message),
             MessagesPlaceholder(variable_name="messages"),
-            SystemMessage(content="{search_results}")
+            HumanMessage(content="Here are the search results I found for your query:\n\n{search_results}\n\nPlease use ONLY these search results to answer my question.")
         ])
 
         self.evaluation_prompt = ChatPromptTemplate.from_messages([
