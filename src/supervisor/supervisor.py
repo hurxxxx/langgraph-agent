@@ -5,15 +5,18 @@ This module implements a supervisor agent that orchestrates multiple specialized
 The supervisor is responsible for understanding user queries, delegating tasks to appropriate
 specialized agents, coordinating communication between agents, and synthesizing final responses.
 
-The supervisor can operate in two modes:
+The supervisor can operate in multiple modes:
 1. Standard mode: Simple delegation to a single agent
-2. MCP mode: Complex task breakdown and delegation to multiple agents using the Master Control Program
+2. MCP mode: Complex task breakdown and delegation to multiple agents
+3. CrewAI mode: Role-based agent teams with hierarchical structure
+4. AutoGen mode: Conversational multi-agent systems with dynamic agent interactions
+5. LangGraph mode: Graph-based workflows with conditional routing
 """
 
 import os
 import json
 import time
-from typing import Dict, List, Any, Optional, Callable, Union
+from typing import Dict, List, Any, Optional, Callable, Union, Literal
 
 # Import LangSmith utilities
 from utils.langsmith_utils import tracer
@@ -22,8 +25,11 @@ from utils.langsmith_utils import tracer
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 
-# Import MCP agent
+# Import MCP agents
 from agents.mcp_agent import MCPAgent, MCPAgentConfig
+from agents.crew_mcp_agent import CrewMCPAgent, CrewMCPAgentConfig
+from agents.autogen_mcp_agent import AutoGenMCPAgent, AutoGenMCPAgentConfig
+from agents.langgraph_mcp_agent import LangGraphMCPAgent, LangGraphMCPAgentConfig
 
 
 class SupervisorConfig:
@@ -36,17 +42,22 @@ class SupervisorConfig:
         temperature=0,
         streaming=True,
         system_message=None,
-        use_mcp=False,
+        mcp_mode: Optional[Literal["standard", "mcp", "crew", "autogen", "langgraph"]] = "standard",
         complexity_threshold=0.7,
-        mcp_config=None
+        mcp_config=None,
+        crew_mcp_config=None,
+        autogen_mcp_config=None,
+        langgraph_mcp_config=None
     ):
         self.llm_provider = llm_provider
         self.openai_model = openai_model
         self.anthropic_model = anthropic_model
         self.temperature = temperature
         self.streaming = streaming
-        self.use_mcp = use_mcp
+        self.mcp_mode = mcp_mode
         self.complexity_threshold = complexity_threshold
+
+        # Initialize MCP configs with default values if not provided
         self.mcp_config = mcp_config or MCPAgentConfig(
             llm_provider=llm_provider,
             openai_model=openai_model,
@@ -54,6 +65,31 @@ class SupervisorConfig:
             temperature=temperature,
             streaming=streaming
         )
+
+        self.crew_mcp_config = crew_mcp_config or CrewMCPAgentConfig(
+            llm_provider=llm_provider,
+            openai_model=openai_model,
+            anthropic_model=anthropic_model,
+            temperature=temperature,
+            streaming=streaming
+        )
+
+        self.autogen_mcp_config = autogen_mcp_config or AutoGenMCPAgentConfig(
+            llm_provider=llm_provider,
+            openai_model=openai_model,
+            anthropic_model=anthropic_model,
+            temperature=temperature,
+            streaming=streaming
+        )
+
+        self.langgraph_mcp_config = langgraph_mcp_config or LangGraphMCPAgentConfig(
+            llm_provider=llm_provider,
+            openai_model=openai_model,
+            anthropic_model=anthropic_model,
+            temperature=temperature,
+            streaming=streaming
+        )
+
         self.system_message = system_message or """
         You are a supervisor agent that coordinates multiple specialized agents to solve complex tasks.
         Your job is to:
@@ -66,14 +102,22 @@ class SupervisorConfig:
         You can use multiple agents in sequence or in parallel if needed.
         """
 
+    @property
+    def use_mcp(self) -> bool:
+        """Backward compatibility property for use_mcp."""
+        return self.mcp_mode != "standard"
+
 
 class Supervisor:
     """
     Supervisor agent that orchestrates multiple specialized agents.
 
-    The supervisor can operate in two modes:
+    The supervisor can operate in multiple modes:
     1. Standard mode: Simple delegation to a single agent
     2. MCP mode: Complex task breakdown and delegation to multiple agents
+    3. CrewAI mode: Role-based agent teams with hierarchical structure
+    4. AutoGen mode: Conversational multi-agent systems with dynamic agent interactions
+    5. LangGraph mode: Graph-based workflows with conditional routing
     """
 
     def __init__(
@@ -109,11 +153,37 @@ class Supervisor:
         else:
             raise ValueError(f"Unsupported LLM provider: {self.config.llm_provider}")
 
-        # Initialize MCP agent if enabled
+        # Initialize MCP agents based on mode
         self.mcp_agent = None
-        if self.config.use_mcp:
+        self.crew_mcp_agent = None
+        self.autogen_mcp_agent = None
+        self.langgraph_mcp_agent = None
+
+        # Initialize standard MCP agent
+        if self.config.mcp_mode == "mcp":
             self.mcp_agent = MCPAgent(
                 config=self.config.mcp_config,
+                agents=self.agents
+            )
+
+        # Initialize CrewAI-style MCP agent
+        elif self.config.mcp_mode == "crew":
+            self.crew_mcp_agent = CrewMCPAgent(
+                config=self.config.crew_mcp_config,
+                agents=self.agents
+            )
+
+        # Initialize AutoGen-style MCP agent
+        elif self.config.mcp_mode == "autogen":
+            self.autogen_mcp_agent = AutoGenMCPAgent(
+                config=self.config.autogen_mcp_config,
+                agents=self.agents
+            )
+
+        # Initialize LangGraph-style MCP agent
+        elif self.config.mcp_mode == "langgraph":
+            self.langgraph_mcp_agent = LangGraphMCPAgent(
+                config=self.config.langgraph_mcp_config,
                 agents=self.agents
             )
 
@@ -302,7 +372,22 @@ class Supervisor:
             "stream": stream
         }
 
-        # Assess task complexity and determine whether to use MCP
+        # If MCP mode is explicitly set, use the corresponding MCP agent
+        if self.config.mcp_mode != "standard":
+            if self.config.mcp_mode == "mcp" and self.mcp_agent is not None:
+                print(f"Using standard MCP agent (mode: {self.config.mcp_mode})")
+                return self.mcp_agent.invoke(state)
+            elif self.config.mcp_mode == "crew" and self.crew_mcp_agent is not None:
+                print(f"Using CrewAI-style MCP agent (mode: {self.config.mcp_mode})")
+                return self.crew_mcp_agent.invoke(state)
+            elif self.config.mcp_mode == "autogen" and self.autogen_mcp_agent is not None:
+                print(f"Using AutoGen-style MCP agent (mode: {self.config.mcp_mode})")
+                return self.autogen_mcp_agent.invoke(state)
+            elif self.config.mcp_mode == "langgraph" and self.langgraph_mcp_agent is not None:
+                print(f"Using LangGraph-style MCP agent (mode: {self.config.mcp_mode})")
+                return self.langgraph_mcp_agent.invoke(state)
+
+        # If no specific MCP mode is set, assess task complexity and determine whether to use MCP
         complexity_score, use_mcp = self._assess_task_complexity(query)
         state["complexity_score"] = complexity_score
 

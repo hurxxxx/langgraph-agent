@@ -98,6 +98,11 @@ This document tracks the development tasks for the multi-agent supervisor system
   - [x] Implement execution planning for complex tasks
   - [x] Add integration with Supervisor for automatic complexity assessment
   - [x] Create examples demonstrating MCP agent usage
+  - [x] Implement additional MCP architectures:
+    - [x] CrewAI-style MCP: Role-based agent teams with hierarchical structure
+    - [x] AutoGen-style MCP: Conversational multi-agent systems with dynamic agent interactions
+    - [x] LangGraph-style MCP: Graph-based workflows with conditional routing
+  - [x] Update Supervisor to support multiple MCP modes
 
 ### Image Generation Testing
 - [x] Enhance image generation agent to save images as local files
