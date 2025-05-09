@@ -44,16 +44,39 @@ This document tracks the development tasks for the multi-agent supervisor system
 - [x] Test the API with curl HTTP requests
 - [x] Verify supervisor task delegation with complex prompts
 - [x] Implement sub-graph and parallel processing techniques
+- [ ] Enhance supervisor to automatically identify parallelizable tasks in prompts
+- [ ] Implement parallel processing for independent tasks (web search, vector search)
+- [ ] Process multiple search topics in parallel when identified in a single query
 - [ ] Optimize agent performance and response quality
 
 ## Pending Tasks
 
 ### Additional Agents
 - [ ] Implement SQL RAG agent
+  - [ ] Configure PostgreSQL connection (ID: postgres, PW: 102938)
+  - [ ] Create complex schema structures for testing
+  - [ ] Generate or import substantial sample data
+  - [ ] Implement SQL query generation and execution
+  - [ ] Implement RAG functionality with SQL results
 - [ ] Implement vector retrieval agent
+  - [ ] Configure PostgreSQL with pgvector extension
+  - [ ] Create necessary database users and permissions
+  - [ ] Implement vector database creation and management
+  - [ ] Implement efficient vector search and retrieval
 - [ ] Implement reranking agent
-- [ ] Implement writer agent
+- [ ] Implement document generation agents
+  - [ ] Report Writer Agent for formal reports
+  - [ ] Blog Writer Agent for blog posts and articles
+  - [ ] Academic Writer Agent for research papers
+  - [ ] Proposal Writer Agent for business proposals
+  - [ ] Planning Document Agent for project plans
 - [ ] Implement MCP agent
+
+### Image Generation Testing
+- [ ] Enhance image generation agent to save images as local files
+- [ ] Implement verification mechanisms for image generation
+- [ ] Create test suite for various image formats and resolutions
+- [ ] Add support for image metadata and attribution
 
 ### Testing & Deployment
 - [ ] Create unit tests for all components

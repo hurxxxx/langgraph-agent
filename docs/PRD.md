@@ -22,7 +22,9 @@ May 9, 2025
 1. **Supervisor Agent**
    - Orchestrate communication between specialized agents
    - Delegate tasks based on user prompts
-   - Support parallel processing when appropriate
+   - Analyze prompts to automatically identify parallelizable tasks
+   - Support parallel processing for independent tasks (e.g., web search and vector search)
+   - Process multiple search topics in parallel when identified in a single query
    - Implement human-in-the-loop feedback mechanisms
    - Handle both streaming and non-streaming responses
 
@@ -48,17 +50,23 @@ May 9, 2025
 
 2. **SQL RAG Agents**
    - Support for:
-     - PostgreSQL
+     - PostgreSQL (local instance with credentials: ID: postgres, PW: 102938)
      - SQLite
      - Other SQL databases as needed
+   - Create complex schema structures for testing
+   - Generate or import substantial sample data for comprehensive testing
+   - Support for importing external database samples
 
 3. **Vector Storage Agents**
    - Implement integrations with:
      - Chroma
      - Qdrant
      - Milvus
-     - pgvector
+     - pgvector (using local PostgreSQL instance with credentials: ID: postgres, PW: 102938)
      - Meilisearch
+   - Configure and set up PostgreSQL with pgvector extension
+   - Create necessary database users and permissions
+   - Implement vector database creation and management
 
 4. **Vector Retrieval Agent**
    - Efficient retrieval from vector stores
@@ -75,10 +83,21 @@ May 9, 2025
      - DALL-E
      - GPT-4o image generation API
      - Other image generation services
+   - Save generated images as local files for verification
+   - Implement testing mechanisms to verify image generation
+   - Support various image formats and resolutions
 
-7. **Writer Agent**
+7. **Document Generation Agents**
+   - Implement specialized agents for various document types:
+     - Report Writer Agent: For formal reports and summaries
+     - Blog Writer Agent: For engaging blog posts and articles
+     - Academic Writer Agent: For research papers and academic documents
+     - Proposal Writer Agent: For business proposals and pitches
+     - Planning Document Agent: For project plans and specifications
    - Content generation and refinement
    - Support for different writing styles and formats
+   - Implement templates for various document types
+   - Support for citations and references where appropriate
 
 8. **MCP (Master Control Program) Agent**
    - High-level orchestration and planning
