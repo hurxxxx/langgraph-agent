@@ -114,24 +114,20 @@ def main():
     if agents:
         print(f"Available agents: {agents}")
 
-    queries = [
-        "What are the latest developments in AI?",
-        "Generate an image of a futuristic city with flying cars.",
-        "Store this information: The capital of France is Paris."
-    ]
+    korean_news_query = "오늘의 한국 주요 뉴스를 섹션별로 정리해서 보고서를 만들아줘"
 
     print("\n=== Non-Streaming Example ===")
-    print(f"Query: {queries[0]}")
+    print(f"Query: {korean_news_query}")
 
-    response = non_streaming_request(queries[0], base_url)
+    response = non_streaming_request(korean_news_query, base_url)
     if response:
         print("\nResponse:")
         print(response["response"])
 
     print("\n=== Streaming Example ===")
-    print(f"Query: {queries[1]}")
+    print(f"Query: {korean_news_query}")
 
-    streaming_request(queries[1], base_url)
+    streaming_request(korean_news_query, base_url)
 
 
 if __name__ == "__main__":
