@@ -8,11 +8,15 @@ This module implements a search agent that can retrieve information from various
 - DuckDuckGo
 - Other search APIs
 
-The agent can be configured to use different search providers and supports streaming responses.
+The agent can be configured to use multiple search providers simultaneously, supports parallel search,
+and can evaluate search results to determine if additional searches are needed.
 """
 
 import os
-from typing import Dict, List, Any, Optional, TypedDict, Annotated, Literal, Union
+import time
+import asyncio
+import concurrent.futures
+from typing import Dict, List, Any, Optional, TypedDict, Annotated, Literal, Union, Set
 from pydantic import BaseModel, Field
 
 from langchain_openai import ChatOpenAI
@@ -31,38 +35,57 @@ class SearchResult(BaseModel):
     title: str
     url: str
     snippet: str
+    provider: Optional[str] = None  # Which provider returned this result
 
 
 class SearchAgentConfig(BaseModel):
     """Configuration for the search agent."""
-    provider: Literal["tavily", "serper", "google", "duckduckgo"] = "tavily"
+    providers: List[Literal["tavily", "serper", "google", "duckduckgo"]] = ["serper"]
+    default_provider: Literal["tavily", "serper", "google", "duckduckgo"] = "serper"
     llm_model: str = "gpt-4o"
     temperature: float = 0
     streaming: bool = True
     max_results: int = 5
+    parallel_search: bool = True
+    evaluate_results: bool = True
+    additional_queries: bool = True
     system_message: str = """
     You are a search agent that retrieves information from the web.
     Your job is to:
     1. Understand the search query
     2. Retrieve relevant information from the web
-    3. Summarize the results in a clear and concise way
+    3. Evaluate if the results are sufficient or if additional searches are needed
+    4. Summarize the results in a clear and concise way
 
     Always cite your sources with URLs.
+    """
+    evaluation_system_message: str = """
+    You are an expert at evaluating search results. Your job is to:
+    1. Analyze the search results for a query
+    2. Determine if the results provide sufficient information to answer the query
+    3. If the results are insufficient, suggest additional search queries that would help
+
+    Be specific about what information is missing and what additional queries would help find it.
     """
 
 
 class SearchAgent:
     """
     Search agent that retrieves information from various search providers.
+    Supports multiple providers, parallel search, and result evaluation.
     """
 
-    def __init__(self, config: SearchAgentConfig = SearchAgentConfig()):
+    def __init__(self, config: Optional[SearchAgentConfig] = None):
         """
         Initialize the search agent.
 
         Args:
             config: Configuration for the search agent
         """
+        # Load configuration from environment if not provided
+        if config is None:
+            config = self._load_config_from_env()
+
         self.config = config
 
         # Initialize LLM
@@ -71,6 +94,13 @@ class SearchAgent:
                 model=config.llm_model,
                 temperature=config.temperature,
                 streaming=config.streaming
+            )
+
+            # Initialize evaluation LLM (non-streaming for better evaluation)
+            self.evaluation_llm = ChatOpenAI(
+                model=config.llm_model,
+                temperature=0.1,  # Lower temperature for more consistent evaluations
+                streaming=False
             )
         except Exception as e:
             print(f"Warning: Could not initialize ChatOpenAI: {str(e)}")
@@ -90,33 +120,101 @@ class SearchAgent:
 
                     return {"content": f"Here are the search results for: {query}"}
             self.llm = MockLLM()
+            self.evaluation_llm = MockLLM()
 
-        # Initialize search tool based on provider
-        self.search_tool = self._initialize_search_tool()
+        # Initialize search tools for all providers
+        self.search_tools = {}
+        for provider in config.providers:
+            tool = self._initialize_search_tool(provider)
+            if tool:
+                self.search_tools[provider] = tool
 
-        # Create prompt template
+        # If no tools were initialized, use the default provider
+        if not self.search_tools and config.default_provider:
+            tool = self._initialize_search_tool(config.default_provider)
+            if tool:
+                self.search_tools[config.default_provider] = tool
+
+        # Create prompt templates
         self.prompt = ChatPromptTemplate.from_messages([
             SystemMessage(content=config.system_message),
             MessagesPlaceholder(variable_name="messages"),
             SystemMessage(content="Search results: {search_results}")
         ])
 
-    def _initialize_search_tool(self) -> Any:
+        self.evaluation_prompt = ChatPromptTemplate.from_messages([
+            SystemMessage(content=config.evaluation_system_message),
+            SystemMessage(content="Original query: {query}"),
+            SystemMessage(content="Search results: {search_results}"),
+            HumanMessage(content="Are these search results sufficient to answer the query? If not, what additional search queries would help?")
+        ])
+
+    def _load_config_from_env(self) -> SearchAgentConfig:
         """
-        Initialize the appropriate search tool based on the configured provider.
+        Load configuration from environment variables.
 
         Returns:
-            Any: The initialized search tool
+            SearchAgentConfig: Configuration loaded from environment
+        """
+        # Get providers from environment
+        providers_str = os.getenv("SEARCH_PROVIDERS", "serper")
+        providers = [p.strip() for p in providers_str.split(",") if p.strip()]
+
+        # Validate providers
+        valid_providers = ["tavily", "serper", "google", "duckduckgo"]
+        providers = [p for p in providers if p in valid_providers]
+
+        # If no valid providers, use default
+        if not providers:
+            providers = ["serper"]
+
+        # Get default provider
+        default_provider = os.getenv("DEFAULT_SEARCH_PROVIDER", providers[0])
+        if default_provider not in valid_providers:
+            default_provider = providers[0]
+
+        # Get other settings
+        max_results = int(os.getenv("SEARCH_MAX_RESULTS", "5"))
+        parallel_search = os.getenv("SEARCH_PARALLEL", "true").lower() == "true"
+        additional_queries = os.getenv("SEARCH_ADDITIONAL_QUERIES", "true").lower() == "true"
+
+        return SearchAgentConfig(
+            providers=providers,
+            default_provider=default_provider,
+            max_results=max_results,
+            parallel_search=parallel_search,
+            additional_queries=additional_queries
+        )
+
+    def _initialize_search_tool(self, provider: str) -> Any:
+        """
+        Initialize a search tool for the specified provider.
+
+        Args:
+            provider: The search provider to initialize
+
+        Returns:
+            Any: The initialized search tool, or None if initialization failed
         """
         try:
-            if self.config.provider == "tavily":
+            if provider == "tavily":
+                api_key = os.getenv("TAVILY_API_KEY")
+                if not api_key:
+                    print("Warning: TAVILY_API_KEY not found in environment")
+                    return None
+
                 return TavilySearchResults(
-                    api_key=os.getenv("TAVILY_API_KEY"),
+                    api_key=api_key,
                     max_results=self.config.max_results
                 )
-            elif self.config.provider == "serper":
+            elif provider == "serper":
+                api_key = os.getenv("SERPER_API_KEY")
+                if not api_key:
+                    print("Warning: SERPER_API_KEY not found in environment")
+                    return None
+
                 search = GoogleSerperAPIWrapper(
-                    serper_api_key=os.getenv("SERPER_API_KEY"),
+                    serper_api_key=api_key,
                     k=self.config.max_results
                 )
                 return Tool(
@@ -124,31 +222,38 @@ class SearchAgent:
                     description="Search Google using Serper API for recent results.",
                     func=search.run
                 )
-            elif self.config.provider == "google":
-                search = GoogleSearchAPIWrapper()
+            elif provider == "google":
+                api_key = os.getenv("GOOGLE_API_KEY")
+                cse_id = os.getenv("GOOGLE_CSE_ID")
+                if not api_key or not cse_id:
+                    print("Warning: GOOGLE_API_KEY or GOOGLE_CSE_ID not found in environment")
+                    return None
+
+                search = GoogleSearchAPIWrapper(
+                    google_api_key=api_key,
+                    google_cse_id=cse_id
+                )
                 return Tool(
                     name="Google Search",
                     description="Search Google for recent results.",
                     func=search.run
                 )
-            elif self.config.provider == "duckduckgo":
+            elif provider == "duckduckgo":
                 return DuckDuckGoSearchRun()
             else:
-                raise ValueError(f"Unsupported search provider: {self.config.provider}")
+                print(f"Warning: Unsupported search provider: {provider}")
+                return None
         except Exception as e:
-            print(f"Warning: Could not initialize search tool: {str(e)}")
-            # Use a mock implementation
-            class MockSearchTool:
-                def invoke(self, query):
-                    return [f"Mock search result for: {query}"]
-            return MockSearchTool()
+            print(f"Warning: Could not initialize search tool for {provider}: {str(e)}")
+            return None
 
-    def _format_search_results(self, results: List[Any]) -> List[SearchResult]:
+    def _format_search_results(self, results: List[Any], provider: str) -> List[SearchResult]:
         """
         Format search results into a standardized format.
 
         Args:
             results: Raw search results from the provider
+            provider: The provider that returned these results
 
         Returns:
             List[SearchResult]: Formatted search results
@@ -161,68 +266,84 @@ class SearchAgent:
                 formatted_results.append(SearchResult(
                     title="Search Result",
                     url="No direct URL available",
-                    snippet=result
+                    snippet=result,
+                    provider=provider
                 ))
                 continue
 
             # Handle dictionary results
             if isinstance(result, dict):
-                if self.config.provider == "tavily":
+                if provider == "tavily":
                     formatted_results.append(SearchResult(
                         title=result.get("title", "No title"),
                         url=result.get("url", "No URL"),
-                        snippet=result.get("content", "No content")
+                        snippet=result.get("content", "No content"),
+                        provider=provider
                     ))
-                elif self.config.provider == "serper":
+                elif provider == "serper":
                     formatted_results.append(SearchResult(
                         title=result.get("title", "No title"),
                         url=result.get("link", "No URL"),
-                        snippet=result.get("snippet", "No snippet")
+                        snippet=result.get("snippet", "No snippet"),
+                        provider=provider
                     ))
-                elif self.config.provider == "google":
+                elif provider == "google":
                     formatted_results.append(SearchResult(
                         title=result.get("title", "No title"),
                         url=result.get("link", "No URL"),
-                        snippet=result.get("snippet", "No snippet")
+                        snippet=result.get("snippet", "No snippet"),
+                        provider=provider
                     ))
                 else:
                     # Generic dictionary handling
                     formatted_results.append(SearchResult(
                         title=result.get("title", "No title"),
                         url=result.get("url", result.get("link", "No URL")),
-                        snippet=result.get("snippet", result.get("content", str(result)))
+                        snippet=result.get("snippet", result.get("content", str(result))),
+                        provider=provider
                     ))
             else:
                 # Handle other types
                 formatted_results.append(SearchResult(
                     title="Search Result",
                     url="No direct URL available",
-                    snippet=str(result)
+                    snippet=str(result),
+                    provider=provider
                 ))
 
         return formatted_results
 
-    def search(self, query: str, max_retries: int = 3) -> List[SearchResult]:
+    def _search_with_provider(self, query: str, provider: str, max_retries: int = 3) -> List[SearchResult]:
         """
-        Perform a search using the configured provider.
+        Perform a search using a specific provider.
 
         Args:
             query: Search query
+            provider: Provider to use for search
             max_retries: Maximum number of retries for transient errors
 
         Returns:
             List[SearchResult]: Search results
         """
+        if provider not in self.search_tools:
+            return [SearchResult(
+                title="Provider Error",
+                url="",
+                snippet=f"Provider {provider} is not available.",
+                provider=provider
+            )]
+
+        search_tool = self.search_tools[provider]
         retry_count = 0
         last_error = None
 
         while retry_count < max_retries:
             try:
-                raw_results = self.search_tool.invoke(query)
+                raw_results = search_tool.invoke(query)
 
                 # Handle different return types from different providers
                 if not isinstance(raw_results, list):
-                    if self.config.provider == "serper":
+                    if provider == "serper":
                         # Serper returns a dictionary with organic results
                         if isinstance(raw_results, dict) and "organic" in raw_results:
                             raw_results = raw_results["organic"]
@@ -244,18 +365,19 @@ class SearchAgent:
                             return [SearchResult(
                                 title="Search Error",
                                 url="",
-                                snippet=f"Error searching with Serper: {error_msg}. Please try again later."
+                                snippet=f"Error searching with {provider}: {error_msg}. Please try again later.",
+                                provider=provider
                             )]
                         else:
                             raw_results = [raw_results]
                     else:
                         raw_results = [raw_results]
 
-                return self._format_search_results(raw_results)
+                return self._format_search_results(raw_results, provider)
 
             except Exception as e:
                 last_error = e
-                print(f"Search error (attempt {retry_count + 1}/{max_retries}): {str(e)}")
+                print(f"Search error with {provider} (attempt {retry_count + 1}/{max_retries}): {str(e)}")
 
                 # Check if it's a connection error or timeout (common transient errors)
                 error_str = str(e).lower()
@@ -275,14 +397,272 @@ class SearchAgent:
 
         # If we get here, all retries failed
         error_message = str(last_error) if last_error else "Unknown search error"
-        print(f"Search failed after {max_retries} attempts: {error_message}")
+        print(f"Search with {provider} failed after {max_retries} attempts: {error_message}")
 
         # Return a helpful error message as a search result
         return [SearchResult(
             title="Search Error",
             url="",
-            snippet=f"Error performing search: {error_message}. Please try again later."
+            snippet=f"Error performing search with {provider}: {error_message}. Please try again later.",
+            provider=provider
         )]
+
+    async def _search_with_provider_async(self, query: str, provider: str, max_retries: int = 3) -> List[SearchResult]:
+        """
+        Perform a search using a specific provider asynchronously.
+
+        Args:
+            query: Search query
+            provider: Provider to use for search
+            max_retries: Maximum number of retries for transient errors
+
+        Returns:
+            List[SearchResult]: Search results
+        """
+        # Use ThreadPoolExecutor to run the synchronous search in a separate thread
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(
+                executor, self._search_with_provider, query, provider, max_retries
+            )
+
+    async def _search_parallel(self, query: str, max_retries: int = 3) -> List[SearchResult]:
+        """
+        Perform searches with all available providers in parallel.
+
+        Args:
+            query: Search query
+            max_retries: Maximum number of retries for transient errors
+
+        Returns:
+            List[SearchResult]: Combined search results from all providers
+        """
+        # Create tasks for each provider
+        tasks = []
+        for provider in self.search_tools.keys():
+            task = self._search_with_provider_async(query, provider, max_retries)
+            tasks.append(task)
+
+        # Wait for all tasks to complete
+        results = await asyncio.gather(*tasks)
+
+        # Flatten the results
+        all_results = []
+        for provider_results in results:
+            all_results.extend(provider_results)
+
+        return all_results
+
+    def search(self, query: str, max_retries: int = 3) -> List[SearchResult]:
+        """
+        Perform a search using the configured providers.
+
+        Args:
+            query: Search query
+            max_retries: Maximum number of retries for transient errors
+
+        Returns:
+            List[SearchResult]: Search results
+        """
+        # If no search tools are available, return an error
+        if not self.search_tools:
+            return [SearchResult(
+                title="Search Error",
+                url="",
+                snippet="No search providers are available. Please check your API keys.",
+                provider="none"
+            )]
+
+        # If parallel search is enabled and we have multiple providers, use parallel search
+        if self.config.parallel_search and len(self.search_tools) > 1:
+            try:
+                # Create an event loop if one doesn't exist
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+
+                # Run the parallel search
+                results = loop.run_until_complete(self._search_parallel(query, max_retries))
+                return results
+            except Exception as e:
+                print(f"Error in parallel search: {str(e)}")
+                print("Falling back to sequential search")
+                # Fall back to sequential search
+
+        # Sequential search with all providers
+        all_results = []
+        for provider in self.search_tools.keys():
+            results = self._search_with_provider(query, provider, max_retries)
+            all_results.extend(results)
+
+        return all_results
+
+    def evaluate_search_results(self, query: str, results: List[SearchResult]) -> Dict[str, Any]:
+        """
+        Evaluate search results to determine if they are sufficient or if additional searches are needed.
+
+        Args:
+            query: Original search query
+            results: Search results to evaluate
+
+        Returns:
+            Dict[str, Any]: Evaluation results including sufficiency and additional queries
+        """
+        if not self.config.evaluate_results:
+            # Skip evaluation if disabled
+            return {
+                "sufficient": True,
+                "additional_queries": []
+            }
+
+        if not results:
+            # No results, definitely need more
+            return {
+                "sufficient": False,
+                "additional_queries": [f"more information about {query}"]
+            }
+
+        # Format results for evaluation
+        formatted_results = "\n\n".join([
+            f"Title: {result.title}\nURL: {result.url}\nSnippet: {result.snippet}\nProvider: {result.provider}"
+            for result in results
+        ])
+
+        try:
+            # Generate evaluation using LLM
+            response = self.evaluation_llm.invoke(
+                self.evaluation_prompt.format(
+                    query=query,
+                    search_results=formatted_results
+                )
+            )
+
+            # Extract content from response
+            if isinstance(response, dict):
+                evaluation = response.get("content", "")
+            elif hasattr(response, "content"):
+                evaluation = response.content
+            else:
+                evaluation = str(response)
+
+            # Parse the evaluation to determine if results are sufficient
+            evaluation_lower = evaluation.lower()
+            sufficient = (
+                "sufficient" in evaluation_lower or
+                "adequate" in evaluation_lower or
+                "enough information" in evaluation_lower
+            ) and not (
+                "not sufficient" in evaluation_lower or
+                "insufficient" in evaluation_lower or
+                "not enough" in evaluation_lower or
+                "need more" in evaluation_lower
+            )
+
+            # Extract additional queries if results are insufficient
+            additional_queries = []
+            if not sufficient and self.config.additional_queries:
+                # Look for suggested queries in the evaluation
+                lines = evaluation.split('\n')
+                for line in lines:
+                    line = line.strip()
+                    if (
+                        "search for" in line.lower() or
+                        "query about" in line.lower() or
+                        "search query" in line.lower() or
+                        "additional query" in line.lower() or
+                        line.startswith('"') and line.endswith('"') or
+                        line.startswith("- ")
+                    ):
+                        # Clean up the line to extract just the query
+                        query_text = line
+                        for prefix in ["search for", "query about", "search query", "additional query", "- "]:
+                            if prefix in query_text.lower():
+                                query_text = query_text.lower().split(prefix, 1)[1].strip()
+
+                        # Remove quotes if present
+                        if query_text.startswith('"') and query_text.endswith('"'):
+                            query_text = query_text[1:-1]
+
+                        if query_text and len(query_text) > 3:  # Minimum query length
+                            additional_queries.append(query_text)
+
+            return {
+                "sufficient": sufficient,
+                "evaluation": evaluation,
+                "additional_queries": additional_queries[:3]  # Limit to 3 additional queries
+            }
+
+        except Exception as e:
+            print(f"Error evaluating search results: {str(e)}")
+            # Default to sufficient if evaluation fails
+            return {
+                "sufficient": True,
+                "evaluation": f"Error evaluating results: {str(e)}",
+                "additional_queries": []
+            }
+
+    def perform_search_with_evaluation(self, query: str, max_retries: int = 3) -> Dict[str, Any]:
+        """
+        Perform a search with evaluation and additional searches if needed.
+
+        Args:
+            query: Search query
+            max_retries: Maximum number of retries for transient errors
+
+        Returns:
+            Dict[str, Any]: Search results and evaluation
+        """
+        # Perform initial search
+        initial_results = self.search(query, max_retries)
+
+        # Skip evaluation if disabled or if we got errors
+        if not self.config.evaluate_results or any("Error" in result.title for result in initial_results):
+            return {
+                "results": initial_results,
+                "evaluation": {
+                    "sufficient": True,
+                    "additional_queries": []
+                },
+                "all_queries": [query]
+            }
+
+        # Evaluate the results
+        evaluation = self.evaluate_search_results(query, initial_results)
+
+        # If results are sufficient or additional queries are disabled, return
+        if evaluation["sufficient"] or not self.config.additional_queries or not evaluation["additional_queries"]:
+            return {
+                "results": initial_results,
+                "evaluation": evaluation,
+                "all_queries": [query]
+            }
+
+        # Perform additional searches
+        all_results = list(initial_results)  # Copy initial results
+        all_queries = [query]  # Track all queries used
+
+        for additional_query in evaluation["additional_queries"]:
+            print(f"Performing additional search: {additional_query}")
+            additional_results = self.search(additional_query, max_retries)
+            all_results.extend(additional_results)
+            all_queries.append(additional_query)
+
+        # Remove duplicates (based on URL)
+        unique_results = []
+        seen_urls = set()
+
+        for result in all_results:
+            if result.url not in seen_urls:
+                seen_urls.add(result.url)
+                unique_results.append(result)
+
+        return {
+            "results": unique_results,
+            "evaluation": evaluation,
+            "all_queries": all_queries
+        }
 
     def __call__(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -306,15 +686,18 @@ class SearchAgent:
                     query = subtask["description"]
                     print(f"Using subtask description as query: {query}")
 
-            # Perform search with retries
-            search_results = self.search(query)
+            # Perform search with evaluation and additional searches if needed
+            search_data = self.perform_search_with_evaluation(query)
+            search_results = search_data["results"]
+            evaluation = search_data["evaluation"]
+            all_queries = search_data["all_queries"]
 
             # Check if we got an error result
             has_error = any("Error" in result.title for result in search_results)
 
             # Format results for display
             formatted_results = "\n\n".join([
-                f"Title: {result.title}\nURL: {result.url}\nSnippet: {result.snippet}"
+                f"Title: {result.title}\nURL: {result.url}\nSnippet: {result.snippet}\nProvider: {result.provider}"
                 for result in search_results
             ])
 
@@ -339,10 +722,12 @@ class SearchAgent:
                 "results": [
                     result.model_dump() if hasattr(result, "model_dump")
                     else vars(result) if hasattr(result, "__dict__")
-                    else {"title": str(result), "url": "", "snippet": str(result)}
+                    else {"title": str(result), "url": "", "snippet": str(result), "provider": getattr(result, "provider", "unknown")}
                     for result in search_results
                 ],
-                "has_error": has_error
+                "has_error": has_error,
+                "evaluation": evaluation,
+                "all_queries": all_queries
             }
 
             # Add error information if there was an error
@@ -390,26 +775,42 @@ class SearchAgent:
 
 # Example usage
 if __name__ == "__main__":
-    # Set up environment variables
-    if not os.getenv("TAVILY_API_KEY"):
-        os.environ["TAVILY_API_KEY"] = "your-tavily-api-key"
+    # Load environment variables
+    from dotenv import load_dotenv
+    load_dotenv()
 
-    if not os.getenv("SERPER_API_KEY"):
-        os.environ["SERPER_API_KEY"] = "your-serper-api-key"
+    # Create search agent with configuration from environment variables
+    search_agent = SearchAgent()
 
-    # Create search agent
-    search_agent = SearchAgent(
-        config=SearchAgentConfig(
-            provider="serper",  # Use Serper as the default provider
-            max_results=5
-        )
-    )
+    # Print configuration
+    print(f"Search providers: {search_agent.config.providers}")
+    print(f"Default provider: {search_agent.config.default_provider}")
+    print(f"Parallel search: {search_agent.config.parallel_search}")
+    print(f"Evaluate results: {search_agent.config.evaluate_results}")
+    print(f"Additional queries: {search_agent.config.additional_queries}")
+    print(f"Available search tools: {list(search_agent.search_tools.keys())}")
 
     # Test with a query
     state = {
-        "messages": [{"role": "user", "content": "What is the latest news about AI?"}],
+        "messages": [{"role": "user", "content": "What are the latest advancements in quantum computing in 2025?"}],
         "agent_outputs": {}
     }
 
+    print("\nPerforming search...")
     updated_state = search_agent(state)
+
+    # Print search details
+    search_output = updated_state["agent_outputs"]["search_agent"]
+    print(f"\nSearch queries used: {search_output.get('all_queries', ['unknown'])}")
+    print(f"Total results: {len(search_output.get('results', []))}")
+
+    # Print evaluation if available
+    if "evaluation" in search_output:
+        eval_data = search_output["evaluation"]
+        print(f"\nResults sufficient: {eval_data.get('sufficient', True)}")
+        if "additional_queries" in eval_data and eval_data["additional_queries"]:
+            print(f"Additional queries suggested: {eval_data['additional_queries']}")
+
+    # Print response
+    print("\nResponse:")
     print(updated_state["messages"][-1]["content"])
