@@ -814,11 +814,14 @@ class SearchAgent:
 
             # Print prompt for debugging
             print("\nPrompt for LLM (first 500 chars):")
-            prompt_str = str(prompt_with_results)
+
+            # Convert to messages for better debugging
+            messages = prompt_with_results.to_messages()
+            prompt_str = "\n".join([f"{msg.type}: {msg.content[:100]}..." if len(msg.content) > 100 else f"{msg.type}: {msg.content}" for msg in messages])
             print(prompt_str[:500] + "..." if len(prompt_str) > 500 else prompt_str)
 
             # Invoke LLM
-            response = self.llm.invoke(prompt_with_results)
+            response = self.llm.invoke(messages)
 
             # Extract content from response
             if isinstance(response, dict):
