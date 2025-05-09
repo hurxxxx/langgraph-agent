@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multi-Agent Supervisor Demo</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        .input-container {
+            display: flex;
+            gap: 10px;
+        }
+        
+        textarea {
+            flex-grow: 1;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-family: inherit;
+            min-height: 100px;
+        }
+        
+        button {
+            padding: 10px 20px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        
+        button:hover {
+            background-color: #45a049;
+        }
+        
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        
+        .response-container {
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 20px;
+            min-height: 200px;
+            white-space: pre-wrap;
+            background-color: #f9f9f9;
+        }
+        
+        .agent-info {
+            margin-top: 10px;
+            font-style: italic;
+            color: #666;
+        }
+        
+        .options {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 10px;
+        }
+        
+        .checkbox-container {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Multi-Agent Supervisor Demo</h1>
+    
+    <div class="container">
+        <div class="options">
+            <div class="checkbox-container">
+                <input type="checkbox" id="streamingCheckbox" checked>
+                <label for="streamingCheckbox">Enable Streaming</label>
+            </div>
+            
+            <div class="checkbox-container">
+                <input type="checkbox" id="showAgentInfoCheckbox" checked>
+                <label for="showAgentInfoCheckbox">Show Agent Info</label>
+            </div>
+        </div>
+        
+        <div class="input-container">
+            <textarea id="queryInput" placeholder="Enter your query here..."></textarea>
+            <button id="submitButton">Submit</button>
+        </div>
+        
+        <div>
+            <h3>Response:</h3>
+            <div id="responseContainer" class="response-container"></div>
+            <div id="agentInfo" class="agent-info"></div>
+        </div>
+    </div>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const queryInput = document.getElementById('queryInput');
+            const submitButton = document.getElementById('submitButton');
+            const responseContainer = document.getElementById('responseContainer');
+            const agentInfo = document.getElementById('agentInfo');
+            const streamingCheckbox = document.getElementById('streamingCheckbox');
+            const showAgentInfoCheckbox = document.getElementById('showAgentInfoCheckbox');
+            
+            // API endpoint
+            const apiUrl = 'http://localhost:8000/query';
+            
+            // Submit button click handler
+            submitButton.addEventListener('click', function() {
+                const query = queryInput.value.trim();
+                
+                if (!query) {
+                    alert('Please enter a query');
+                    return;
+                }
+                
+                // Clear previous response
+                responseContainer.textContent = '';
+                agentInfo.textContent = '';
+                
+                // Disable submit button during processing
+                submitButton.disabled = true;
+                
+                // Check if streaming is enabled
+                const isStreaming = streamingCheckbox.checked;
+                
+                if (isStreaming) {
+                    // Handle streaming request
+                    fetchStream(query);
+                } else {
+                    // Handle non-streaming request
+                    fetchNonStream(query);
+                }
+            });
+            
+            // Non-streaming request handler
+            async function fetchNonStream(query) {
+                try {
+                    const response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            query: query,
+                            stream: false
+                        }),
+                    });
+                    
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    
+                    const data = await response.json();
+                    
+                    // Display response
+                    responseContainer.textContent = data.response;
+                    
+                    // Display agent trace if available and enabled
+                    if (showAgentInfoCheckbox.checked && data.agent_trace) {
+                        agentInfo.textContent = `Agent Trace: ${JSON.stringify(data.agent_trace, null, 2)}`;
+                    }
+                } catch (error) {
+                    console.error('Error:', error);
+                    responseContainer.textContent = `Error: ${error.message}`;
+                } finally {
+                    // Re-enable submit button
+                    submitButton.disabled = false;
+                }
+            }
+            
+            // Streaming request handler
+            async function fetchStream(query) {
+                try {
+                    const response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            query: query,
+                            stream: true
+                        }),
+                    });
+                    
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    
+                    let currentAgent = '';
+                    
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        
+                        const chunk = decoder.decode(value);
+                        const lines = chunk.split('\n\n');
+                        
+                        for (const line of lines) {
+                            if (line.startsWith('data: ')) {
+                                const data = line.slice(6);
+                                if (data === '[DONE]') {
+                                    console.log('Stream complete');
+                                    break;
+                                }
+                                
+                                try {
+                                    const parsedData = JSON.parse(data);
+                                    
+                                    // Update response content
+                                    if (parsedData.messages && parsedData.messages.length > 0) {
+                                        const latestMessage = parsedData.messages[parsedData.messages.length - 1];
+                                        if (latestMessage.role === 'assistant' && latestMessage.content) {
+                                            responseContainer.textContent = latestMessage.content;
+                                        }
+                                    }
+                                    
+                                    // Update agent info if enabled
+                                    if (showAgentInfoCheckbox.checked && parsedData.next_agent) {
+                                        currentAgent = parsedData.next_agent;
+                                        agentInfo.textContent = `Current Agent: ${currentAgent}`;
+                                    }
+                                } catch (e) {
+                                    console.error('Error parsing JSON:', e);
+                                }
+                            }
+                        }
+                    }
+                } catch (error) {
+                    console.error('Error:', error);
+                    responseContainer.textContent = `Error: ${error.message}`;
+                } finally {
+                    // Re-enable submit button
+                    submitButton.disabled = false;
+                }
+            }
+        });
+    </script>
+</body>
+</html>
