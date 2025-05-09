@@ -37,13 +37,17 @@ class SupervisorConfig:
     def __init__(
         self,
         llm_provider="openai",
-        openai_model="gpt-4o",
-        anthropic_model="claude-3-opus-20240229",
+        openai_model="gpt-4.1",  # Updated to latest flagship model
+        openai_reasoning_model="o3",  # Specialized reasoning model
+        openai_efficient_model="o3-mini",  # More efficient model for simpler tasks
+        anthropic_model="claude-3-7-sonnet-20250219",  # Updated to Claude 3.7
         temperature=0,
         streaming=True,
         system_message=None,
         mcp_mode: Optional[Literal["standard", "mcp", "crew", "autogen", "langgraph"]] = "standard",
         complexity_threshold=0.7,
+        auto_select_mcp=True,  # Automatically select MCP mode based on task complexity
+        auto_parallel=True,  # Automatically use parallel processing when appropriate
         mcp_config=None,
         crew_mcp_config=None,
         autogen_mcp_config=None,
@@ -51,16 +55,22 @@ class SupervisorConfig:
     ):
         self.llm_provider = llm_provider
         self.openai_model = openai_model
+        self.openai_reasoning_model = openai_reasoning_model
+        self.openai_efficient_model = openai_efficient_model
         self.anthropic_model = anthropic_model
         self.temperature = temperature
         self.streaming = streaming
         self.mcp_mode = mcp_mode
         self.complexity_threshold = complexity_threshold
+        self.auto_select_mcp = auto_select_mcp
+        self.auto_parallel = auto_parallel
 
         # Initialize MCP configs with default values if not provided
         self.mcp_config = mcp_config or MCPAgentConfig(
             llm_provider=llm_provider,
             openai_model=openai_model,
+            openai_reasoning_model=openai_reasoning_model,
+            openai_efficient_model=openai_efficient_model,
             anthropic_model=anthropic_model,
             temperature=temperature,
             streaming=streaming
@@ -69,6 +79,8 @@ class SupervisorConfig:
         self.crew_mcp_config = crew_mcp_config or CrewMCPAgentConfig(
             llm_provider=llm_provider,
             openai_model=openai_model,
+            openai_reasoning_model=openai_reasoning_model,
+            openai_efficient_model=openai_efficient_model,
             anthropic_model=anthropic_model,
             temperature=temperature,
             streaming=streaming
@@ -77,6 +89,8 @@ class SupervisorConfig:
         self.autogen_mcp_config = autogen_mcp_config or AutoGenMCPAgentConfig(
             llm_provider=llm_provider,
             openai_model=openai_model,
+            openai_reasoning_model=openai_reasoning_model,
+            openai_efficient_model=openai_efficient_model,
             anthropic_model=anthropic_model,
             temperature=temperature,
             streaming=streaming
@@ -85,6 +99,8 @@ class SupervisorConfig:
         self.langgraph_mcp_config = langgraph_mcp_config or LangGraphMCPAgentConfig(
             llm_provider=llm_provider,
             openai_model=openai_model,
+            openai_reasoning_model=openai_reasoning_model,
+            openai_efficient_model=openai_efficient_model,
             anthropic_model=anthropic_model,
             temperature=temperature,
             streaming=streaming

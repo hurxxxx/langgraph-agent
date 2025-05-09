@@ -22,6 +22,7 @@ This catalog lists all the documentation created for the multi-agent supervisor 
 | Serper API Integration | `docs/learning/serper_integration.md` | Provides information about integrating Serper API with LangGraph for web search capabilities, including API reference and best practices. |
 | UI Testing Strategy | `docs/UI_TESTING_STRATEGY.md` | Outlines the strategy for UI testing and continuous improvement, including Streamlit test interfaces, Playwright automated testing, and quality evaluation processes. |
 | UI Testing Results | `docs/UI_TESTING_RESULTS.md` | Summarizes the results of UI testing, identifies issues, and provides recommendations for improvements with a detailed plan for addressing each issue. |
+| UI Testing with Playwright | `docs/UI_TESTING_WITH_PLAYWRIGHT.md` | Describes the implementation of UI testing using Playwright, including test scenarios, running tests, and capturing screenshots for verification. |
 
 
 ## Code Documentation
@@ -48,6 +49,8 @@ This catalog lists all the documentation created for the multi-agent supervisor 
 | Monitor Runner | `run_monitor.py` | Script to run the application with the monitoring UI in a web browser. |
 | Streamlit Test Interface | `ui/streamlit/app.py` | Streamlit-based test interface for configuring, executing, and evaluating tests of the multi-agent supervisor system. |
 | UI Tests | `ui/streamlit/test_ui.py` | Playwright-based automated tests for the Streamlit test interface. |
+| Prompt Input Tests | `ui/streamlit/test_prompt_input.py` | Playwright tests for direct prompt input in the Streamlit UI, testing various query types and agent combinations. |
+| UI Test Runner | `ui/streamlit/run_ui_tests.py` | Script to run the Streamlit app and execute Playwright tests automatically. |
 
 
 ## Configuration
