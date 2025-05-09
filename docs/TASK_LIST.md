@@ -62,7 +62,9 @@ This document tracks the development tasks for the multi-agent supervisor system
   - [ ] Configure PostgreSQL with pgvector extension
   - [ ] Create necessary database users and permissions
   - [ ] Implement vector database creation and management
+  - [ ] Integrate OpenAI's embedding-small model for embeddings
   - [ ] Implement efficient vector search and retrieval
+  - [ ] Add semantic similarity search capabilities
 - [ ] Implement reranking agent
 - [ ] Implement document generation agents
   - [ ] Report Writer Agent for formal reports

@@ -64,13 +64,16 @@ May 9, 2025
      - Milvus
      - pgvector (using local PostgreSQL instance with credentials: ID: postgres, PW: 102938)
      - Meilisearch
+   - Use OpenAI's embedding-small model for generating vector embeddings
    - Configure and set up PostgreSQL with pgvector extension
    - Create necessary database users and permissions
    - Implement vector database creation and management
 
 4. **Vector Retrieval Agent**
    - Efficient retrieval from vector stores
+   - Use OpenAI's embedding-small model for query embeddings
    - Support for hybrid search strategies
+   - Implement semantic similarity search
 
 5. **Reranking Agent**
    - Implement reranking with:
