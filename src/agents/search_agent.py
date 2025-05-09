@@ -144,11 +144,12 @@ class SearchAgent:
             if tool:
                 self.search_tools[config.default_provider] = tool
 
-        # Create prompt templates
+        # Create a simpler prompt template
         self.prompt = ChatPromptTemplate.from_messages([
-            SystemMessage(content=config.system_message),
-            MessagesPlaceholder(variable_name="messages"),
-            HumanMessage(content="Here are the search results I found for your query:\n\n{search_results}\n\nPlease use ONLY these search results to answer my question.")
+            SystemMessage(content="You are a helpful assistant that answers questions based on search results."),
+            HumanMessage(content="I want to know: {query}"),
+            AIMessage(content="I'll help you with that. Let me search for information..."),
+            HumanMessage(content="Here are the search results:\n\n{search_results}\n\nBased on ONLY these search results, please answer my question about {query}.")
         ])
 
         self.evaluation_prompt = ChatPromptTemplate.from_messages([
@@ -805,9 +806,9 @@ class SearchAgent:
             print("\nFormatted search results for LLM:")
             print(formatted_results[:500] + "..." if len(formatted_results) > 500 else formatted_results)
 
-            # Generate response using LLM
+            # Generate response using LLM with simplified prompt
             prompt_with_results = self.prompt.format(
-                messages=state["messages"],
+                query=query,
                 search_results=formatted_results
             )
 
