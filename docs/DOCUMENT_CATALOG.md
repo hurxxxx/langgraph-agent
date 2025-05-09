@@ -8,6 +8,7 @@ This catalog lists all the documentation created for the multi-agent supervisor 
 |----------|------|-------------|
 | Product Requirements Document | `docs/PRD.md` | Outlines the requirements and specifications for the multi-agent supervisor system, including project goals, technical requirements, and success criteria. |
 | Task List | `docs/TASK_LIST.md` | Tracks development tasks, including completed, in-progress, and pending tasks. |
+| Test Results | `docs/test_results.md` | Records the results of testing the implementation with real API keys and real-world queries, including observations and next steps. |
 | README | `README.md` | Provides an overview of the project, installation instructions, usage examples, and links to detailed documentation. |
 
 ## Learning Resources

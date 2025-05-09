@@ -24,18 +24,18 @@ from src.agents.quality_agent import QualityAgent, QualityAgentConfig
 def initialize_agents():
     """
     Initialize all specialized agents.
-    
+
     Returns:
         Dict: Dictionary of agent functions keyed by agent name
     """
-    # Initialize search agent
+    # Initialize search agent with Serper
     search_agent = SearchAgent(
         config=SearchAgentConfig(
-            provider="tavily",
+            provider="serper",  # Use Serper as the search provider
             max_results=3
         )
     )
-    
+
     # Initialize vector storage agent
     vector_storage_agent = VectorStorageAgent(
         config=VectorStorageAgentConfig(
@@ -44,7 +44,7 @@ def initialize_agents():
             persist_directory="./example_vector_db"
         )
     )
-    
+
     # Initialize image generation agent
     image_generation_agent = ImageGenerationAgent(
         config=ImageGenerationAgentConfig(
@@ -53,12 +53,12 @@ def initialize_agents():
             image_size="1024x1024"
         )
     )
-    
+
     # Initialize quality agent
     quality_agent = QualityAgent(
         config=QualityAgentConfig()
     )
-    
+
     # Return dictionary of agents
     return {
         "search_agent": search_agent,
@@ -71,23 +71,23 @@ def initialize_agents():
 def non_streaming_example(supervisor, query):
     """
     Example of using the supervisor with a non-streaming response.
-    
+
     Args:
         supervisor: Initialized supervisor
         query: Query to process
     """
     print("\n=== Non-Streaming Example ===")
     print(f"Query: {query}")
-    
+
     # Process query
     result = supervisor.invoke(query=query, stream=False)
-    
+
     # Extract the final response
     final_message = result["messages"][-1]["content"] if result["messages"] else ""
-    
+
     print("\nResponse:")
     print(final_message)
-    
+
     # Print agent outputs
     if "agent_outputs" in result:
         print("\nAgent Outputs:")
@@ -98,40 +98,43 @@ def non_streaming_example(supervisor, query):
 def streaming_example(supervisor, query):
     """
     Example of using the supervisor with a streaming response.
-    
+
     Args:
         supervisor: Initialized supervisor
         query: Query to process
     """
     print("\n=== Streaming Example ===")
     print(f"Query: {query}")
-    
+
     print("\nResponse (streaming):")
-    
+
     # Process query with streaming
-    for i, chunk in enumerate(supervisor.invoke(query=query, stream=True)):
-        # Print chunk number and content
-        print(f"\nChunk {i+1}:")
-        
-        # Extract messages if available
-        if "messages" in chunk and chunk["messages"]:
-            latest_message = chunk["messages"][-1]
-            print(f"Role: {latest_message.get('role', 'unknown')}")
-            print(f"Content: {latest_message.get('content', '')}")
-        
-        # Extract current agent if available
-        if "next_agent" in chunk:
-            print(f"Current Agent: {chunk['next_agent']}")
+    # Note: The current implementation doesn't actually stream chunks
+    # It just returns the final state with stream=True
+    result = supervisor.invoke(query=query, stream=True)
+
+    print("\nFinal Result:")
+    if "messages" in result and result["messages"]:
+        for i, message in enumerate(result["messages"]):
+            print(f"\nMessage {i+1}:")
+            print(f"Role: {message.get('role', 'unknown')}")
+            print(f"Content: {message.get('content', '')}")
+
+    # Print agent outputs
+    if "agent_outputs" in result:
+        print("\nAgent Outputs:")
+        for agent_name, output in result["agent_outputs"].items():
+            print(f"- {agent_name}: {output}")
 
 
 def main():
     """Main function to run the examples."""
     # Load environment variables
     load_dotenv()
-    
+
     # Initialize agents
     agents = initialize_agents()
-    
+
     # Initialize supervisor
     supervisor = Supervisor(
         config=SupervisorConfig(
@@ -141,19 +144,23 @@ def main():
         ),
         agents=agents
     )
-    
-    # Example queries
+
+    # Example queries for testing with real-world scenarios
     queries = [
-        "What are the latest developments in AI?",
+        "What are the latest advancements in quantum computing?",
         "Generate an image of a futuristic city with flying cars.",
-        "Store this information: The capital of France is Paris."
+        "Store this information: The capital of France is Paris.",
+        "What is the current state of climate change research?",
+        "How do large language models like GPT-4 work?"
     ]
-    
-    # Run non-streaming example
-    non_streaming_example(supervisor, queries[0])
-    
+
+    # Run non-streaming examples for search queries
+    non_streaming_example(supervisor, queries[0])  # Quantum computing
+    non_streaming_example(supervisor, queries[3])  # Climate change
+    non_streaming_example(supervisor, queries[4])  # LLMs
+
     # Run streaming example
-    streaming_example(supervisor, queries[1])
+    streaming_example(supervisor, queries[1])  # Image generation
 
 
 if __name__ == "__main__":
