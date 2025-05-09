@@ -566,8 +566,8 @@ class SearchAgent:
             return [query]
 
         try:
-            # Create a prompt for query optimization
-            optimization_prompt = ChatPromptTemplate.from_messages([
+            # Create messages for query optimization
+            messages = [
                 SystemMessage(content="""
                 You are an expert at optimizing search queries. Your job is to:
                 1. Analyze the user's search intent
@@ -581,10 +581,10 @@ class SearchAgent:
                 Return ONLY the optimized queries, one per line, without any explanation or numbering.
                 """),
                 HumanMessage(content=f"Original query: {query}")
-            ])
+            ]
 
             # Generate optimized queries
-            response = self.evaluation_llm.invoke(optimization_prompt)
+            response = self.evaluation_llm.invoke(messages)
 
             # Extract content from response
             if isinstance(response, dict):
