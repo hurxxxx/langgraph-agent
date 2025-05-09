@@ -51,13 +51,21 @@ class SearchAgentConfig(BaseModel):
     additional_queries: bool = True
     system_message: str = """
     You are a search agent that retrieves information from the web.
-    Your job is to:
-    1. Understand the search query
-    2. Retrieve relevant information from the web
-    3. Evaluate if the results are sufficient or if additional searches are needed
-    4. Summarize the results in a clear and concise way
 
-    Always cite your sources with URLs.
+    IMPORTANT: I have already performed web searches for the user's query and will provide you with the search results.
+    You do NOT need to search the web yourself - I've already done that for you.
+
+    Your job is to:
+    1. Carefully analyze the search results I provide
+    2. Use ONLY the information from these search results to answer the user's question
+    3. If the search results contain recent information from 2025, make sure to include it
+    4. Synthesize the information into a comprehensive, accurate response
+    5. ALWAYS cite your sources with URLs from the search results
+
+    DO NOT say you cannot browse the web or access real-time information - I've already done the searching for you.
+    DO NOT rely on your training data - ONLY use the search results I provide.
+
+    If the search results don't contain enough information to fully answer the question, explicitly state what specific information is missing.
     """
     evaluation_system_message: str = """
     You are an expert at evaluating search results. Your job is to:
@@ -66,6 +74,7 @@ class SearchAgentConfig(BaseModel):
     3. If the results are insufficient, suggest additional search queries that would help
 
     Be specific about what information is missing and what additional queries would help find it.
+    Suggest at least 2-3 specific additional search queries that would help find the missing information.
     """
 
 
@@ -559,10 +568,27 @@ class SearchAgent:
             }
 
         # Format results for evaluation
-        formatted_results = "\n\n".join([
-            f"Title: {result.title}\nURL: {result.url}\nSnippet: {result.snippet}\nProvider: {result.provider}"
-            for result in results
-        ])
+        formatted_results = "=== SEARCH RESULTS FOR EVALUATION ===\n\n"
+
+        # Group results by provider for better organization
+        results_by_provider = {}
+        for result in results:
+            provider = result.provider or "unknown"
+            if provider not in results_by_provider:
+                results_by_provider[provider] = []
+            results_by_provider[provider].append(result)
+
+        # Add provider sections
+        for provider, provider_results in results_by_provider.items():
+            formatted_results += f"--- Results from {provider.upper()} ---\n\n"
+
+            for i, result in enumerate(provider_results, 1):
+                formatted_results += f"RESULT {i}:\n"
+                formatted_results += f"Title: {result.title}\n"
+                formatted_results += f"URL: {result.url}\n"
+                formatted_results += f"Content: {result.snippet}\n\n"
+
+        formatted_results += "=== END OF SEARCH RESULTS ==="
 
         print(f"Formatted {len(results)} results for evaluation")
 
@@ -752,10 +778,28 @@ class SearchAgent:
             has_error = any("Error" in result.title for result in search_results)
 
             # Format results for display
-            formatted_results = "\n\n".join([
-                f"Title: {result.title}\nURL: {result.url}\nSnippet: {result.snippet}\nProvider: {result.provider}"
-                for result in search_results
-            ])
+            formatted_results = "=== SEARCH RESULTS ===\n\n"
+
+            # Group results by provider for better organization
+            results_by_provider = {}
+            for result in search_results:
+                provider = result.provider or "unknown"
+                if provider not in results_by_provider:
+                    results_by_provider[provider] = []
+                results_by_provider[provider].append(result)
+
+            # Add provider sections
+            for provider, provider_results in results_by_provider.items():
+                formatted_results += f"--- Results from {provider.upper()} ---\n\n"
+
+                for i, result in enumerate(provider_results, 1):
+                    formatted_results += f"RESULT {i}:\n"
+                    formatted_results += f"Title: {result.title}\n"
+                    formatted_results += f"URL: {result.url}\n"
+                    formatted_results += f"Content: {result.snippet}\n\n"
+
+            formatted_results += "=== END OF SEARCH RESULTS ===\n\n"
+            formatted_results += "IMPORTANT: Use ONLY the information from these search results to answer the user's question."
 
             # Generate response using LLM
             response = self.llm.invoke(
