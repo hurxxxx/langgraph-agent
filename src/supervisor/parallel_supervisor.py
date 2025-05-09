@@ -82,15 +82,15 @@ class ParallelSupervisor:
 
     def _plan_tasks(self, query: str) -> List[Dict[str, Any]]:
         """
-        Plan tasks based on the user query.
+        Plan tasks based on the user query, identifying which tasks can be run in parallel.
 
         Args:
             query: User query
 
         Returns:
-            List[Dict[str, Any]]: List of planned subtasks
+            List[Dict[str, Any]]: List of planned subtasks with parallelization information
         """
-        # Create a prompt for the LLM to break down the task
+        # Create a prompt for the LLM to break down the task and identify parallelizable tasks
         prompt = f"""
         System: {self.config.system_message}
 
@@ -99,11 +99,29 @@ class ParallelSupervisor:
         User query: {query}
 
         Break down this query into subtasks. For each subtask, specify which agent should handle it.
-        Format your response as a JSON array of objects, each with 'subtask_id', 'description', and 'agent' fields.
+        Also, analyze which tasks can be executed in parallel and which must be sequential.
+
+        Guidelines for parallelization:
+        1. Web search and vector search can be run in parallel as they are independent operations
+        2. Multiple search topics within a single query can be processed in parallel
+        3. Tasks that depend on the output of previous tasks must be sequential
+        4. Image generation can typically run in parallel with search operations
+        5. Quality evaluation usually needs to happen after information is gathered
+
+        Format your response as a JSON array of objects, each with:
+        - 'subtask_id': A unique identifier for the subtask
+        - 'description': A description of what the subtask should do
+        - 'agent': Which agent should handle this subtask
+        - 'depends_on': Array of subtask_ids this task depends on (empty array if no dependencies)
+        - 'parallelizable': Boolean indicating if this task can be run in parallel with other tasks
+        - 'parallel_group': Optional group identifier for tasks that can be run in parallel together
+
         Example:
         [
-            {{"subtask_id": 1, "description": "Search for information about X", "agent": "search_agent"}},
-            {{"subtask_id": 2, "description": "Generate an image of Y", "agent": "image_generation_agent"}}
+            {{"subtask_id": 1, "description": "Search for information about climate change", "agent": "search_agent", "depends_on": [], "parallelizable": true, "parallel_group": "searches"}},
+            {{"subtask_id": 2, "description": "Search for information about renewable energy", "agent": "search_agent", "depends_on": [], "parallelizable": true, "parallel_group": "searches"}},
+            {{"subtask_id": 3, "description": "Generate an image of a sustainable city", "agent": "image_generation_agent", "depends_on": [], "parallelizable": true}},
+            {{"subtask_id": 4, "description": "Evaluate the quality of the search results", "agent": "quality_agent", "depends_on": [1, 2], "parallelizable": false}}
         ]
         """
 
@@ -138,25 +156,66 @@ class ParallelSupervisor:
 
     def _create_fallback_subtasks(self, query: str) -> List[Dict[str, Any]]:
         """
-        Create fallback subtasks based on keywords in the query.
+        Create fallback subtasks based on keywords in the query, with parallelization information.
 
         Args:
             query: User query
 
         Returns:
-            List[Dict[str, Any]]: List of subtasks
+            List[Dict[str, Any]]: List of subtasks with parallelization information
         """
         subtasks = []
         subtask_id = 1
+        search_subtasks = []
 
-        # Check for search-related keywords
-        if any(keyword in query.lower() for keyword in ["search", "find", "information", "what is", "tell me about"]):
+        # Parse the query to identify multiple search topics
+        search_topics = self._identify_search_topics(query)
+
+        # If we have multiple search topics, create a subtask for each
+        if search_topics and len(search_topics) > 1:
+            for topic in search_topics:
+                for agent_name in self.agents.keys():
+                    if "search" in agent_name.lower():
+                        search_subtasks.append({
+                            "subtask_id": subtask_id,
+                            "description": f"Search for information about {topic}",
+                            "agent": agent_name,
+                            "depends_on": [],
+                            "parallelizable": True,
+                            "parallel_group": "searches"
+                        })
+                        subtask_id += 1
+                        break
+
+            # Add all search subtasks to the main subtasks list
+            subtasks.extend(search_subtasks)
+        else:
+            # Check for search-related keywords
+            if any(keyword in query.lower() for keyword in ["search", "find", "information", "what is", "tell me about"]):
+                for agent_name in self.agents.keys():
+                    if "search" in agent_name.lower():
+                        subtasks.append({
+                            "subtask_id": subtask_id,
+                            "description": f"Search for information about {query}",
+                            "agent": agent_name,
+                            "depends_on": [],
+                            "parallelizable": True,
+                            "parallel_group": "searches"
+                        })
+                        subtask_id += 1
+                        break
+
+        # Check for vector search keywords
+        if any(keyword in query.lower() for keyword in ["vector", "semantic", "similar"]):
             for agent_name in self.agents.keys():
-                if "search" in agent_name.lower():
+                if "vector" in agent_name.lower() and "retrieval" in agent_name.lower():
                     subtasks.append({
                         "subtask_id": subtask_id,
-                        "description": f"Search for information about {query}",
-                        "agent": agent_name
+                        "description": f"Perform vector search for {query}",
+                        "agent": agent_name,
+                        "depends_on": [],
+                        "parallelizable": True,
+                        "parallel_group": "searches"
                     })
                     subtask_id += 1
                     break
@@ -168,31 +227,43 @@ class ParallelSupervisor:
                     subtasks.append({
                         "subtask_id": subtask_id,
                         "description": f"Generate an image related to {query}",
-                        "agent": agent_name
+                        "agent": agent_name,
+                        "depends_on": [],
+                        "parallelizable": True
                     })
                     subtask_id += 1
                     break
 
         # Check for quality-related keywords
         if any(keyword in query.lower() for keyword in ["quality", "evaluate", "assess", "review"]):
+            # Quality evaluation depends on search results
+            search_ids = [task["subtask_id"] for task in subtasks if "search" in task["agent"].lower()]
+
             for agent_name in self.agents.keys():
                 if "quality" in agent_name.lower():
                     subtasks.append({
                         "subtask_id": subtask_id,
                         "description": f"Evaluate the quality of information about {query}",
-                        "agent": agent_name
+                        "agent": agent_name,
+                        "depends_on": search_ids,
+                        "parallelizable": False
                     })
                     subtask_id += 1
                     break
 
         # Check for storage-related keywords
-        if any(keyword in query.lower() for keyword in ["store", "save", "database", "vector"]):
+        if any(keyword in query.lower() for keyword in ["store", "save", "database"]):
+            # Storage depends on search results
+            search_ids = [task["subtask_id"] for task in subtasks if "search" in task["agent"].lower()]
+
             for agent_name in self.agents.keys():
-                if "vector" in agent_name.lower() or "storage" in agent_name.lower():
+                if "vector" in agent_name.lower() and "storage" in agent_name.lower():
                     subtasks.append({
                         "subtask_id": subtask_id,
                         "description": f"Store information about {query}",
-                        "agent": agent_name
+                        "agent": agent_name,
+                        "depends_on": search_ids,
+                        "parallelizable": False
                     })
                     subtask_id += 1
                     break
@@ -203,10 +274,79 @@ class ParallelSupervisor:
             subtasks.append({
                 "subtask_id": 1,
                 "description": f"Process the query: {query}",
-                "agent": first_agent
+                "agent": first_agent,
+                "depends_on": [],
+                "parallelizable": False
             })
 
         return subtasks
+
+    def _identify_search_topics(self, query: str) -> List[str]:
+        """
+        Identify multiple search topics in a query.
+
+        Args:
+            query: User query
+
+        Returns:
+            List[str]: List of identified search topics
+        """
+        # Use the LLM to identify multiple search topics
+        prompt = f"""
+        Analyze the following query and identify distinct search topics that could be researched in parallel.
+        If there are multiple distinct topics, list them one per line. If there's only one main topic, just return that.
+
+        Query: {query}
+
+        Format your response as a simple list, one topic per line, with no numbering or bullets.
+        """
+
+        try:
+            # Get response from LLM
+            response = self.llm.invoke([{"role": "user", "content": prompt}])
+
+            # Extract content from response
+            if isinstance(response, dict):
+                content = response.get("content", "")
+            elif hasattr(response, "content"):
+                content = response.content
+            else:
+                content = str(response)
+
+            # Split into lines and clean up
+            topics = [topic.strip() for topic in content.strip().split('\n') if topic.strip()]
+
+            # If we have only one topic that's very similar to the original query,
+            # it might not be a multi-topic query
+            if len(topics) == 1 and self._text_similarity(topics[0], query) > 0.8:
+                return []
+
+            return topics if len(topics) > 1 else []
+
+        except Exception as e:
+            print(f"Error identifying search topics: {str(e)}")
+            return []
+
+    def _text_similarity(self, text1: str, text2: str) -> float:
+        """
+        Calculate a simple similarity score between two texts.
+
+        Args:
+            text1: First text
+            text2: Second text
+
+        Returns:
+            float: Similarity score between 0 and 1
+        """
+        # Convert to lowercase and split into words
+        words1 = set(text1.lower().split())
+        words2 = set(text2.lower().split())
+
+        # Calculate Jaccard similarity
+        intersection = len(words1.intersection(words2))
+        union = len(words1.union(words2))
+
+        return intersection / union if union > 0 else 0
 
     def _execute_subtask(self, subtask: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -255,15 +395,20 @@ class ParallelSupervisor:
 
     def _synthesize_response(self, query: str, state: Dict[str, Any]) -> str:
         """
-        Synthesize a final response based on agent outputs.
+        Synthesize a final response based on agent outputs, including parallelization information.
 
         Args:
             query: Original user query
-            state: Current state with agent outputs
+            state: Current state with agent outputs and execution stats
 
         Returns:
             str: Synthesized response
         """
+        # Extract execution statistics if available
+        execution_stats = state.get("execution_stats", {})
+        parallel_batches = execution_stats.get("parallel_batches", 0)
+        total_execution_time = execution_stats.get("total_execution_time", 0)
+
         # Create a prompt for the LLM to synthesize a response
         prompt = f"""
         System: {self.config.system_message}
@@ -275,7 +420,14 @@ class ParallelSupervisor:
         Agent outputs:
         {json.dumps(state["agent_outputs"], indent=2)}
 
+        Execution information:
+        - Tasks were executed in {parallel_batches} parallel batches
+        - Total execution time: {total_execution_time:.2f} seconds
+        - Subtasks: {json.dumps(state["subtasks"], indent=2)}
+
         Please synthesize a helpful response that incorporates the information from all agents.
+        Do NOT mention the execution details or parallel processing in your response unless specifically asked about system performance.
+        Focus on providing a coherent answer to the user's query.
         """
 
         # Get response from LLM
@@ -293,7 +445,7 @@ class ParallelSupervisor:
 
     def invoke(self, query: str, stream: bool = False) -> Dict[str, Any]:
         """
-        Process a user query using the multi-agent system.
+        Process a user query using the multi-agent system with intelligent parallelization.
 
         Args:
             query: User query
@@ -307,6 +459,7 @@ class ParallelSupervisor:
             "messages": [{"role": "user", "content": query}],
             "agent_outputs": {},
             "subtasks": [],
+            "completed_subtasks": set(),
             "final_response": None
         }
 
@@ -314,28 +467,84 @@ class ParallelSupervisor:
         subtasks = self._plan_tasks(query)
         state["subtasks"] = subtasks
 
-        # Execute subtasks in parallel
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            # Create a future for each subtask
-            future_to_subtask = {
-                executor.submit(self._execute_subtask, subtask, state): subtask
-                for subtask in subtasks
-            }
+        # Create a dependency graph
+        dependency_graph = self._create_dependency_graph(subtasks)
 
-            # Process completed futures as they complete
-            for future in concurrent.futures.as_completed(future_to_subtask):
-                subtask = future_to_subtask[future]
-                try:
-                    # Get the result (this will re-raise any exception that occurred)
-                    updated_state = future.result()
+        # Group subtasks by parallel groups
+        parallel_groups = self._group_subtasks_by_parallel_group(subtasks)
 
-                    # Merge the updated state with the main state
-                    for agent_name, output in updated_state["agent_outputs"].items():
-                        state["agent_outputs"][agent_name] = output
-                except Exception as e:
-                    print(f"Error executing subtask {subtask['subtask_id']}: {str(e)}")
-                    agent_name = subtask["agent"]
-                    state["agent_outputs"][agent_name] = {"error": str(e)}
+        # Track execution metrics
+        execution_start_time = time.time()
+        execution_stats = {
+            "total_subtasks": len(subtasks),
+            "completed_subtasks": 0,
+            "parallel_batches": 0,
+            "execution_times": {}
+        }
+
+        # Execute subtasks in waves based on dependencies
+        while len(state["completed_subtasks"]) < len(subtasks):
+            # Find all subtasks that can be executed now (all dependencies satisfied)
+            executable_subtasks = self._get_executable_subtasks(subtasks, state["completed_subtasks"], dependency_graph)
+
+            if not executable_subtasks:
+                # If no subtasks can be executed but we haven't completed all tasks,
+                # there might be a circular dependency or other issue
+                print("Warning: No executable subtasks found but not all subtasks completed.")
+                break
+
+            execution_stats["parallel_batches"] += 1
+            batch_start_time = time.time()
+
+            # Execute this batch of subtasks in parallel
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                # Create a future for each executable subtask
+                future_to_subtask = {
+                    executor.submit(self._execute_subtask, subtask, state): subtask
+                    for subtask in executable_subtasks
+                }
+
+                # Process completed futures as they complete
+                for future in concurrent.futures.as_completed(future_to_subtask):
+                    subtask = future_to_subtask[future]
+                    subtask_id = subtask["subtask_id"]
+                    subtask_start_time = time.time()
+
+                    try:
+                        # Get the result (this will re-raise any exception that occurred)
+                        updated_state = future.result()
+
+                        # Merge the updated state with the main state
+                        for agent_name, output in updated_state["agent_outputs"].items():
+                            state["agent_outputs"][agent_name] = output
+
+                        # Mark this subtask as completed
+                        state["completed_subtasks"].add(subtask_id)
+                        execution_stats["completed_subtasks"] += 1
+
+                    except Exception as e:
+                        print(f"Error executing subtask {subtask_id}: {str(e)}")
+                        agent_name = subtask["agent"]
+                        state["agent_outputs"][agent_name] = {"error": str(e)}
+
+                        # Even if it failed, mark it as completed to avoid deadlock
+                        state["completed_subtasks"].add(subtask_id)
+                        execution_stats["completed_subtasks"] += 1
+
+                    # Record execution time for this subtask
+                    execution_stats["execution_times"][subtask_id] = time.time() - subtask_start_time
+
+            # Record batch execution time
+            batch_execution_time = time.time() - batch_start_time
+            print(f"Batch {execution_stats['parallel_batches']} executed {len(executable_subtasks)} subtasks in {batch_execution_time:.2f} seconds")
+
+        # Record total execution time
+        execution_stats["total_execution_time"] = time.time() - execution_start_time
+        print(f"Total execution time: {execution_stats['total_execution_time']:.2f} seconds")
+        print(f"Executed {execution_stats['completed_subtasks']} subtasks in {execution_stats['parallel_batches']} parallel batches")
+
+        # Add execution stats to state
+        state["execution_stats"] = execution_stats
 
         # Synthesize final response
         final_response = self._synthesize_response(query, state)
@@ -343,6 +552,76 @@ class ParallelSupervisor:
         state["messages"].append({"role": "assistant", "content": final_response})
 
         return state
+
+    def _create_dependency_graph(self, subtasks: List[Dict[str, Any]]) -> Dict[int, List[int]]:
+        """
+        Create a dependency graph from the subtasks.
+
+        Args:
+            subtasks: List of subtasks
+
+        Returns:
+            Dict[int, List[int]]: Dictionary mapping subtask IDs to lists of dependent subtask IDs
+        """
+        # Create a graph where keys are subtask IDs and values are lists of subtasks that depend on this subtask
+        graph = {subtask["subtask_id"]: [] for subtask in subtasks}
+
+        # Populate the graph
+        for subtask in subtasks:
+            for dependency_id in subtask.get("depends_on", []):
+                if dependency_id in graph:
+                    graph[dependency_id].append(subtask["subtask_id"])
+
+        return graph
+
+    def _get_executable_subtasks(self, subtasks: List[Dict[str, Any]], completed_subtasks: set, dependency_graph: Dict[int, List[int]]) -> List[Dict[str, Any]]:
+        """
+        Get subtasks that can be executed now (all dependencies satisfied).
+
+        Args:
+            subtasks: List of all subtasks
+            completed_subtasks: Set of completed subtask IDs
+            dependency_graph: Dependency graph
+
+        Returns:
+            List[Dict[str, Any]]: List of executable subtasks
+        """
+        executable_subtasks = []
+
+        for subtask in subtasks:
+            subtask_id = subtask["subtask_id"]
+
+            # Skip if already completed
+            if subtask_id in completed_subtasks:
+                continue
+
+            # Check if all dependencies are satisfied
+            dependencies = subtask.get("depends_on", [])
+            if all(dep_id in completed_subtasks for dep_id in dependencies):
+                executable_subtasks.append(subtask)
+
+        return executable_subtasks
+
+    def _group_subtasks_by_parallel_group(self, subtasks: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Group subtasks by their parallel_group attribute.
+
+        Args:
+            subtasks: List of subtasks
+
+        Returns:
+            Dict[str, List[Dict[str, Any]]]: Dictionary mapping group names to lists of subtasks
+        """
+        groups = {}
+
+        for subtask in subtasks:
+            group = subtask.get("parallel_group", None)
+            if group:
+                if group not in groups:
+                    groups[group] = []
+                groups[group].append(subtask)
+
+        return groups
 
 
 # Example usage
