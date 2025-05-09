@@ -109,6 +109,10 @@ venv.bak/
 # Vector database files
 vector_db/
 
+# Generated files
+generated_documents/
+generated_images/
+
 # API keys and secrets
 .env
 .env.local
