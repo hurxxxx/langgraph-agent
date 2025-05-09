@@ -26,6 +26,17 @@ from agents.search_agent import SearchAgent, SearchAgentConfig
 from agents.vector_storage_agent import VectorStorageAgent, VectorStorageAgentConfig
 from agents.image_generation_agent import ImageGenerationAgent, ImageGenerationAgentConfig
 from agents.quality_agent import QualityAgent, QualityAgentConfig
+from agents.sql_rag_agent import SQLRAGAgent, SQLRAGAgentConfig
+from agents.vector_retrieval_agent import VectorRetrievalAgent, VectorRetrievalAgentConfig
+
+# Import document generation agents
+from agents.document_generation import (
+    BaseDocumentAgent, BaseDocumentAgentConfig,
+    ReportWriterAgent, ReportWriterAgentConfig,
+    BlogWriterAgent, BlogWriterAgentConfig,
+    AcademicWriterAgent, AcademicWriterAgentConfig,
+    ProposalWriterAgent, ProposalWriterAgentConfig
+)
 
 
 # Define API models
@@ -91,7 +102,10 @@ def initialize_agents():
         config=ImageGenerationAgentConfig(
             provider="dalle",
             dalle_model="dall-e-3",
-            image_size="1024x1024"
+            image_size="1024x1024",
+            save_images=True,
+            images_dir="./generated_images",
+            metadata_dir="./generated_images/metadata"
         )
     )
 
@@ -100,12 +114,69 @@ def initialize_agents():
         config=QualityAgentConfig()
     )
 
+    # Initialize SQL RAG agent
+    sql_rag_agent = SQLRAGAgent(
+        config=SQLRAGAgentConfig(
+            db_type="postgresql",
+            connection_string="postgresql://postgres:102938@localhost:5432/langgraph_agent_db",
+            use_cache=True,
+            cache_ttl=3600
+        )
+    )
+
+    # Initialize vector retrieval agent
+    vector_retrieval_agent = VectorRetrievalAgent(
+        config=VectorRetrievalAgentConfig(
+            store_type="chroma",
+            collection_name="default_collection",
+            persist_directory="./vector_db",
+            embedding_model="text-embedding-3-small",
+            use_cache=True,
+            cache_ttl=3600
+        )
+    )
+
+    # Initialize document generation agents
+    report_writer_agent = ReportWriterAgent(
+        config=ReportWriterAgentConfig(
+            documents_dir="./generated_documents/reports",
+            metadata_dir="./generated_documents/reports/metadata"
+        )
+    )
+
+    blog_writer_agent = BlogWriterAgent(
+        config=BlogWriterAgentConfig(
+            documents_dir="./generated_documents/blogs",
+            metadata_dir="./generated_documents/blogs/metadata"
+        )
+    )
+
+    academic_writer_agent = AcademicWriterAgent(
+        config=AcademicWriterAgentConfig(
+            documents_dir="./generated_documents/academic",
+            metadata_dir="./generated_documents/academic/metadata"
+        )
+    )
+
+    proposal_writer_agent = ProposalWriterAgent(
+        config=ProposalWriterAgentConfig(
+            documents_dir="./generated_documents/proposals",
+            metadata_dir="./generated_documents/proposals/metadata"
+        )
+    )
+
     # Return dictionary of agents
     return {
         "search_agent": search_agent,
         "vector_storage_agent": vector_storage_agent,
         "image_generation_agent": image_generation_agent,
-        "quality_agent": quality_agent
+        "quality_agent": quality_agent,
+        "sql_rag_agent": sql_rag_agent,
+        "vector_retrieval_agent": vector_retrieval_agent,
+        "report_writer_agent": report_writer_agent,
+        "blog_writer_agent": blog_writer_agent,
+        "academic_writer_agent": academic_writer_agent,
+        "proposal_writer_agent": proposal_writer_agent
     }
 
 
@@ -129,8 +200,14 @@ standard_supervisor = Supervisor(
         You have access to the following specialized agents:
         - search_agent: For web searches and information retrieval using Serper (Google Search API)
         - vector_storage_agent: For storing documents in vector databases
+        - vector_retrieval_agent: For retrieving documents from vector databases based on semantic similarity
         - image_generation_agent: For creating images based on descriptions
         - quality_agent: For evaluating the quality of responses
+        - sql_rag_agent: For querying databases and providing insights from data
+        - report_writer_agent: For generating formal reports with executive summaries and recommendations
+        - blog_writer_agent: For creating blog posts and articles with different tones and styles
+        - academic_writer_agent: For writing academic papers with proper citations and formatting
+        - proposal_writer_agent: For creating business proposals with budgets and timelines
 
         Always think carefully about which agent(s) would be most appropriate for the task.
         You can use multiple agents in sequence or in parallel if needed.
@@ -157,8 +234,14 @@ parallel_supervisor = ParallelSupervisor(
         You have access to the following specialized agents:
         - search_agent: For web searches and information retrieval using Serper (Google Search API)
         - vector_storage_agent: For storing documents in vector databases
+        - vector_retrieval_agent: For retrieving documents from vector databases based on semantic similarity
         - image_generation_agent: For creating images based on descriptions
         - quality_agent: For evaluating the quality of responses
+        - sql_rag_agent: For querying databases and providing insights from data
+        - report_writer_agent: For generating formal reports with executive summaries and recommendations
+        - blog_writer_agent: For creating blog posts and articles with different tones and styles
+        - academic_writer_agent: For writing academic papers with proper citations and formatting
+        - proposal_writer_agent: For creating business proposals with budgets and timelines
 
         You can run agents in parallel when appropriate to save time.
         """
