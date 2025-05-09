@@ -11,11 +11,11 @@ import os
 import json
 import time
 import concurrent.futures
-from typing import Dict, List, Any, Optional, Literal
+from typing import Dict, List, Any, Optional, Literal, AsyncGenerator
 from pydantic import BaseModel
 
 # Import LangSmith utilities
-from utils.langsmith_utils import tracer
+from src.utils.langsmith_utils import tracer
 
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
@@ -566,6 +566,178 @@ class ParallelSupervisor:
         state["messages"].append({"role": "assistant", "content": final_response})
 
         return state
+
+    async def astream(self, query: str) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Process a user query using the multi-agent system with intelligent parallelization and streaming.
+
+        Args:
+            query: User query
+
+        Yields:
+            Dict[str, Any]: State updates during processing
+        """
+        import asyncio
+
+        # Initialize state
+        state = {
+            "messages": [{"role": "user", "content": query}],
+            "agent_outputs": {},
+            "subtasks": [],
+            "completed_subtasks": set(),
+            "final_response": None,
+            "stream": True
+        }
+
+        # Plan tasks
+        subtasks = self._plan_tasks(query)
+        state["subtasks"] = subtasks
+
+        # Yield initial state with planned subtasks
+        yield state.copy()
+
+        # Create a dependency graph
+        dependency_graph = self._create_dependency_graph(subtasks)
+
+        # Group subtasks by parallel groups
+        parallel_groups = self._group_subtasks_by_parallel_group(subtasks)
+
+        # Track execution metrics
+        execution_start_time = time.time()
+        execution_stats = {
+            "total_subtasks": len(subtasks),
+            "completed_subtasks": 0,
+            "parallel_batches": 0,
+            "execution_times": {}
+        }
+
+        # Update state with execution stats
+        state["execution_stats"] = execution_stats
+        yield state.copy()
+
+        # Execute subtasks in waves based on dependencies
+        while len(state["completed_subtasks"]) < len(subtasks):
+            # Find all subtasks that can be executed now (all dependencies satisfied)
+            executable_subtasks = self._get_executable_subtasks(subtasks, state["completed_subtasks"], dependency_graph)
+
+            if not executable_subtasks:
+                # If no subtasks can be executed but we haven't completed all tasks,
+                # there might be a circular dependency or other issue
+                print("Warning: No executable subtasks found but not all subtasks completed.")
+                state["warning"] = "No executable subtasks found but not all subtasks completed."
+                yield state.copy()
+                break
+
+            execution_stats["parallel_batches"] += 1
+            batch_start_time = time.time()
+
+            # Update state with batch information
+            state["current_batch"] = execution_stats["parallel_batches"]
+            state["current_subtasks"] = [subtask["description"] for subtask in executable_subtasks]
+            yield state.copy()
+
+            # Execute this batch of subtasks
+            # Note: We can't use ThreadPoolExecutor with async/await directly,
+            # so we'll execute subtasks sequentially for streaming
+            for subtask in executable_subtasks:
+                subtask_id = subtask["subtask_id"]
+                agent_name = subtask["agent"]
+
+                # Update state with current subtask
+                state["current_subtask"] = subtask
+                state["current_agent"] = agent_name
+                yield state.copy()
+
+                subtask_start_time = time.time()
+
+                try:
+                    # Execute the subtask
+                    agent = self.agents[agent_name]
+
+                    # Check if agent supports streaming
+                    if hasattr(agent, 'astream') and callable(getattr(agent, 'astream')):
+                        # Create a copy of the state for this agent
+                        agent_state = {
+                            "messages": state["messages"].copy(),
+                            "agent_outputs": {},
+                            "current_subtask": subtask,
+                            "subtasks": [],
+                            "stream": True
+                        }
+
+                        # Stream the agent's response
+                        async for chunk in agent.astream(agent_state):
+                            # Update the main state with the agent's output
+                            if "agent_outputs" in chunk and agent_name in chunk["agent_outputs"]:
+                                state["agent_outputs"][agent_name] = chunk["agent_outputs"][agent_name]
+
+                            # Update the current chunk information
+                            chunk["current_subtask"] = subtask
+                            chunk["current_agent"] = agent_name
+
+                            # Yield the updated chunk
+                            yield chunk
+                    else:
+                        # Fall back to non-streaming invoke
+                        updated_state = self._execute_subtask(subtask, state)
+
+                        # Merge the updated state with the main state
+                        for name, output in updated_state["agent_outputs"].items():
+                            state["agent_outputs"][name] = output
+
+                        # Yield the updated state
+                        yield state.copy()
+
+                    # Mark this subtask as completed
+                    state["completed_subtasks"].add(subtask_id)
+                    execution_stats["completed_subtasks"] += 1
+
+                except Exception as e:
+                    print(f"Error executing subtask {subtask_id}: {str(e)}")
+                    state["agent_outputs"][agent_name] = {"error": str(e)}
+                    state["error"] = f"Error executing subtask {subtask_id}: {str(e)}"
+                    yield state.copy()
+
+                    # Even if it failed, mark it as completed to avoid deadlock
+                    state["completed_subtasks"].add(subtask_id)
+                    execution_stats["completed_subtasks"] += 1
+
+                # Record execution time for this subtask
+                execution_stats["execution_times"][subtask_id] = time.time() - subtask_start_time
+
+                # Update execution stats in state
+                state["execution_stats"] = execution_stats
+                yield state.copy()
+
+                # Small delay to allow for better streaming visualization
+                await asyncio.sleep(0.1)
+
+            # Record batch execution time
+            batch_execution_time = time.time() - batch_start_time
+            print(f"Batch {execution_stats['parallel_batches']} executed {len(executable_subtasks)} subtasks in {batch_execution_time:.2f} seconds")
+
+            # Update state with batch completion
+            state["batch_complete"] = True
+            state["batch_execution_time"] = batch_execution_time
+            yield state.copy()
+
+        # Record total execution time
+        execution_stats["total_execution_time"] = time.time() - execution_start_time
+        print(f"Total execution time: {execution_stats['total_execution_time']:.2f} seconds")
+        print(f"Executed {execution_stats['completed_subtasks']} subtasks in {execution_stats['parallel_batches']} parallel batches")
+
+        # Update execution stats in state
+        state["execution_stats"] = execution_stats
+        state["execution_complete"] = True
+        yield state.copy()
+
+        # Synthesize final response
+        final_response = self._synthesize_response(query, state)
+        state["final_response"] = final_response
+        state["messages"].append({"role": "assistant", "content": final_response})
+
+        # Yield final state
+        yield state
 
     def _create_dependency_graph(self, subtasks: List[Dict[str, Any]]) -> Dict[int, List[int]]:
         """

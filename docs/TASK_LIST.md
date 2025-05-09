@@ -118,10 +118,10 @@ This document tracks the development tasks for the multi-agent supervisor system
   - [x] Search agent tests
   - [x] Vector storage agent tests
   - [x] API tests
-- [ ] Create integration tests for the system
-  - [ ] End-to-end tests
-  - [ ] API integration tests
-  - [ ] Agent interaction tests
+- [x] Create integration tests for the system
+  - [x] End-to-end tests
+  - [x] API integration tests
+  - [x] Agent interaction tests
 - [ ] Set up CI/CD pipeline
 - [ ] Create Docker container for easy deployment
 - [ ] Create docker-compose.yml for easy local deployment

@@ -16,20 +16,20 @@ The supervisor can operate in multiple modes:
 import os
 import json
 import time
-from typing import Dict, List, Any, Optional, Callable, Union, Literal
+from typing import Dict, List, Any, Optional, Callable, Union, Literal, AsyncGenerator
 
 # Import LangSmith utilities
-from utils.langsmith_utils import tracer
+from src.utils.langsmith_utils import tracer
 
 # Import LangChain components
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 
 # Import MCP agents
-from agents.mcp_agent import MCPAgent, MCPAgentConfig
-from agents.crew_mcp_agent import CrewMCPAgent, CrewMCPAgentConfig
-from agents.autogen_mcp_agent import AutoGenMCPAgent, AutoGenMCPAgentConfig
-from agents.langgraph_mcp_agent import LangGraphMCPAgent, LangGraphMCPAgentConfig
+from src.agents.mcp_agent import MCPAgent, MCPAgentConfig
+from src.agents.crew_mcp_agent import CrewMCPAgent, CrewMCPAgentConfig
+from src.agents.autogen_mcp_agent import AutoGenMCPAgent, AutoGenMCPAgentConfig
+from src.agents.langgraph_mcp_agent import LangGraphMCPAgent, LangGraphMCPAgentConfig
 
 
 class SupervisorConfig:
@@ -432,6 +432,158 @@ class Supervisor:
             )
             updated_state["messages"].append({"role": "assistant", "content": final_response})
             return updated_state
+
+    async def astream(self, query):
+        """
+        Process a user query using the multi-agent system with streaming.
+
+        Args:
+            query: User query
+
+        Yields:
+            Dict: State updates during processing
+        """
+        import asyncio
+
+        # Initialize state
+        state = {
+            "messages": [{"role": "user", "content": query}],
+            "agent_outputs": {},
+            "human_input": None,
+            "stream": True
+        }
+
+        # If MCP mode is explicitly set, use the corresponding MCP agent
+        if self.config.mcp_mode != "standard":
+            if self.config.mcp_mode == "mcp" and self.mcp_agent is not None:
+                print(f"Using standard MCP agent (mode: {self.config.mcp_mode})")
+
+                # Check if MCP agent has astream method
+                if hasattr(self.mcp_agent, 'astream') and callable(getattr(self.mcp_agent, 'astream')):
+                    async for chunk in self.mcp_agent.astream(state):
+                        yield chunk
+                    return
+                else:
+                    # Fall back to non-streaming invoke
+                    result = self.mcp_agent.invoke(state)
+                    yield result
+                    return
+
+            # Handle other MCP modes similarly
+            elif self.config.mcp_mode == "crew" and self.crew_mcp_agent is not None:
+                print(f"Using CrewAI-style MCP agent (mode: {self.config.mcp_mode})")
+
+                # Check if CrewAI MCP agent has astream method
+                if hasattr(self.crew_mcp_agent, 'astream') and callable(getattr(self.crew_mcp_agent, 'astream')):
+                    async for chunk in self.crew_mcp_agent.astream(state):
+                        yield chunk
+                    return
+                else:
+                    # Fall back to non-streaming invoke
+                    result = self.crew_mcp_agent.invoke(state)
+                    yield result
+                    return
+
+            elif self.config.mcp_mode == "autogen" and self.autogen_mcp_agent is not None:
+                print(f"Using AutoGen-style MCP agent (mode: {self.config.mcp_mode})")
+
+                # Check if AutoGen MCP agent has astream method
+                if hasattr(self.autogen_mcp_agent, 'astream') and callable(getattr(self.autogen_mcp_agent, 'astream')):
+                    async for chunk in self.autogen_mcp_agent.astream(state):
+                        yield chunk
+                    return
+                else:
+                    # Fall back to non-streaming invoke
+                    result = self.autogen_mcp_agent.invoke(state)
+                    yield result
+                    return
+
+            elif self.config.mcp_mode == "langgraph" and self.langgraph_mcp_agent is not None:
+                print(f"Using LangGraph-style MCP agent (mode: {self.config.mcp_mode})")
+
+                # Check if LangGraph MCP agent has astream method
+                if hasattr(self.langgraph_mcp_agent, 'astream') and callable(getattr(self.langgraph_mcp_agent, 'astream')):
+                    async for chunk in self.langgraph_mcp_agent.astream(state):
+                        yield chunk
+                    return
+                else:
+                    # Fall back to non-streaming invoke
+                    result = self.langgraph_mcp_agent.invoke(state)
+                    yield result
+                    return
+
+        # If no specific MCP mode is set, assess task complexity and determine whether to use MCP
+        complexity_score, use_mcp = self._assess_task_complexity(query)
+        state["complexity_score"] = complexity_score
+
+        # If task is complex and MCP is enabled, use MCP agent
+        if use_mcp and self.mcp_agent is not None:
+            print(f"Using MCP agent for complex task (complexity score: {complexity_score:.2f})")
+
+            # Check if MCP agent has astream method
+            if hasattr(self.mcp_agent, 'astream') and callable(getattr(self.mcp_agent, 'astream')):
+                async for chunk in self.mcp_agent.astream(state):
+                    yield chunk
+                return
+            else:
+                # Fall back to non-streaming invoke
+                result = self.mcp_agent.invoke(state)
+                yield result
+                return
+
+        # Otherwise, use standard supervisor logic
+        print(f"Using standard supervisor (complexity score: {complexity_score:.2f})")
+
+        # Determine which agent to use
+        agent_name = self._determine_next_agent(query)
+        state["next_agent"] = agent_name
+        state["current_agent"] = agent_name
+
+        # Yield initial state with agent selection
+        yield state
+
+        # If no agent is appropriate, generate a response directly
+        if agent_name is None:
+            response = self.llm.invoke([
+                {"role": "system", "content": self.config.system_message},
+                {"role": "user", "content": query}
+            ])
+            state["messages"].append({"role": "assistant", "content": response.content})
+            yield state
+            return
+
+        # Call the agent with streaming if supported
+        agent = self.agents[agent_name]
+
+        # Check if agent supports streaming
+        if hasattr(agent, 'astream') and callable(getattr(agent, 'astream')):
+            async for chunk in agent.astream(state):
+                chunk["current_agent"] = agent_name
+                yield chunk
+        else:
+            # Fall back to non-streaming invoke
+            updated_state = agent(state)
+            updated_state["current_agent"] = agent_name
+            yield updated_state
+
+        # Check if we need human feedback
+        if "request_human_feedback" in state.get("agent_outputs", {}).get(agent_name, {}):
+            updated_state = self._get_human_feedback(state)
+            yield updated_state
+
+        # Synthesize final response
+        final_response = self._synthesize_final_response(
+            state["messages"],
+            state["agent_outputs"]
+        )
+
+        # Create final state
+        final_state = state.copy()
+        final_state["messages"].append({"role": "assistant", "content": final_response})
+        final_state["current_agent"] = "supervisor"
+
+        # Yield final state
+        yield final_state
 
 
 
