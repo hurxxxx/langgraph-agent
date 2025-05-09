@@ -801,13 +801,23 @@ class SearchAgent:
             formatted_results += "=== END OF SEARCH RESULTS ===\n\n"
             formatted_results += "IMPORTANT: Use ONLY the information from these search results to answer the user's question."
 
+            # Print formatted results for debugging
+            print("\nFormatted search results for LLM:")
+            print(formatted_results[:500] + "..." if len(formatted_results) > 500 else formatted_results)
+
             # Generate response using LLM
-            response = self.llm.invoke(
-                self.prompt.format(
-                    messages=state["messages"],
-                    search_results=formatted_results
-                )
+            prompt_with_results = self.prompt.format(
+                messages=state["messages"],
+                search_results=formatted_results
             )
+
+            # Print prompt for debugging
+            print("\nPrompt for LLM (first 500 chars):")
+            prompt_str = str(prompt_with_results)
+            print(prompt_str[:500] + "..." if len(prompt_str) > 500 else prompt_str)
+
+            # Invoke LLM
+            response = self.llm.invoke(prompt_with_results)
 
             # Extract content from response
             if isinstance(response, dict):
