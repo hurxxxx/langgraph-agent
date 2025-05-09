@@ -118,7 +118,8 @@ class VectorRetrievalAgentConfig(BaseModel):
     embedding_model: str = "text-embedding-3-small"
     llm_provider: Literal["openai", "anthropic"] = "openai"
     openai_model: str = "gpt-4o"
-    anthropic_model: str = "claude-3-opus-20240229"
+    anthropic_model: str = "claude-3-7-sonnet-20250219"
+    anthropic_reasoning_model: str = "claude-3-7-haiku-20250201"
     temperature: float = 0
     streaming: bool = True
     max_tokens: int = 4000

@@ -20,32 +20,38 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Import LangSmith utilities
-from utils.langsmith_utils import tracer
+from src.utils.langsmith_utils import tracer
 
 # Import supervisor and agents
-from supervisor.supervisor import Supervisor, SupervisorConfig
-from supervisor.parallel_supervisor import ParallelSupervisor, ParallelSupervisorConfig
-from agents.search_agent import SearchAgent, SearchAgentConfig
-from agents.vector_storage_agent import VectorStorageAgent, VectorStorageAgentConfig
-from agents.image_generation_agent import ImageGenerationAgent, ImageGenerationAgentConfig
-from agents.quality_agent import QualityAgent, QualityAgentConfig
-from agents.sql_rag_agent import SQLRAGAgent, SQLRAGAgentConfig
-from agents.vector_retrieval_agent import VectorRetrievalAgent, VectorRetrievalAgentConfig
-from agents.reranking_agent import RerankingAgent, RerankingAgentConfig
+from src.supervisor.supervisor import Supervisor, SupervisorConfig
+from src.supervisor.parallel_supervisor import ParallelSupervisor, ParallelSupervisorConfig
+from src.agents.search_agent import SearchAgent, SearchAgentConfig
+from src.agents.vector_storage_agent import VectorStorageAgent, VectorStorageAgentConfig
+from src.agents.image_generation_agent import ImageGenerationAgent, ImageGenerationAgentConfig
+from src.agents.quality_agent import QualityAgent, QualityAgentConfig
+from src.agents.sql_rag_agent import SQLRAGAgent, SQLRAGAgentConfig
+from src.agents.vector_retrieval_agent import VectorRetrievalAgent, VectorRetrievalAgentConfig
+from src.agents.reranking_agent import RerankingAgent, RerankingAgentConfig
 
 # Import document generation agents
-from agents.document_generation import (
+from src.agents.document_generation import (
     BaseDocumentAgent, BaseDocumentAgentConfig,
     ReportWriterAgent, ReportWriterAgentConfig,
     BlogWriterAgent, BlogWriterAgentConfig
 )
-from agents.document_generation_part2 import (
+from src.agents.document_generation_part2 import (
     AcademicWriterAgent, AcademicWriterAgentConfig,
     ProposalWriterAgent, ProposalWriterAgentConfig
 )
-from agents.planning_document_agent import (
+from src.agents.planning_document_agent import (
     PlanningDocumentAgent, PlanningDocumentAgentConfig
 )
+
+# Import MCP agents
+from src.agents.mcp_agent import MCPAgent, MCPAgentConfig
+from src.agents.crew_mcp_agent import CrewMCPAgent, CrewMCPAgentConfig
+from src.agents.autogen_mcp_agent import AutoGenMCPAgent, AutoGenMCPAgentConfig
+from src.agents.langgraph_mcp_agent import LangGraphMCPAgent, LangGraphMCPAgentConfig
 
 
 # Define API models
@@ -119,9 +125,10 @@ def initialize_agents():
     # Initialize image generation agent
     image_generation_agent = ImageGenerationAgent(
         config=ImageGenerationAgentConfig(
-            provider="dalle",
-            dalle_model="dall-e-3",
+            provider="gpt-image",
+            gpt_image_model="gpt-image-1",
             image_size="1024x1024",
+            image_quality="high",
             save_images=True,
             images_dir="./generated_images",
             metadata_dir="./generated_images/metadata"
@@ -337,7 +344,7 @@ async def process_query(request: QueryRequest):
         else:
             # Return a standard response
             result = selected_supervisor.invoke(
-                query=request.query,
+                request.query,
                 stream=False
             )
 

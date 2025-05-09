@@ -329,27 +329,97 @@ def main():
     # Load environment variables
     load_dotenv()
 
-    # PostgreSQL connection parameters
-    host = "localhost"
-    port = "5432"
-    user = "postgres"
-    password = "102938"  # As specified in the requirements
-    dbname = "langgraph_agent_db"
+    # PostgreSQL connection parameters for vector database
+    vector_host = os.getenv("VECTOR_DB_HOST", "localhost")
+    vector_port = os.getenv("VECTOR_DB_PORT", "5432")
+    vector_user = os.getenv("VECTOR_DB_USER", "postgres")
+    vector_password = os.getenv("VECTOR_DB_PASSWORD", "102938")
+    vector_dbname = os.getenv("VECTOR_DB_NAME", "vectordb")
 
-    # Create database
-    create_database(host, port, user, password, dbname)
+    # PostgreSQL connection parameters for SQL RAG database
+    sql_rag_host = os.getenv("SQL_RAG_DB_HOST", "localhost")
+    sql_rag_port = os.getenv("SQL_RAG_DB_PORT", "5432")
+    sql_rag_user = os.getenv("SQL_RAG_DB_USER", "postgres")
+    sql_rag_password = os.getenv("SQL_RAG_DB_PASSWORD", "102938")
+    sql_rag_dbname = os.getenv("SQL_RAG_DB_NAME", "langgraph_agent_db")
 
-    # Set up pgvector extension
-    setup_pgvector(host, port, user, password, dbname)
+    # Setup Vector Database
+    print("\n=== Setting up Vector Database ===")
+    create_database(vector_host, vector_port, vector_user, vector_password, vector_dbname)
+    setup_pgvector(vector_host, vector_port, vector_user, vector_password, vector_dbname)
 
-    # Create complex schema
-    create_complex_schema(host, port, user, password, dbname)
+    # Create documents table for vector storage
+    conn = psycopg2.connect(
+        host=vector_host,
+        port=vector_port,
+        user=vector_user,
+        password=vector_password,
+        dbname=vector_dbname
+    )
+    cursor = conn.cursor()
 
-    # Insert sample data
-    insert_sample_data(host, port, user, password, dbname)
+    # Check if pgvector extension is available
+    cursor.execute("SELECT 1 FROM pg_extension WHERE extname = 'vector'")
+    pgvector_available = cursor.fetchone() is not None
 
-    print("\nPostgreSQL setup completed successfully!")
-    print(f"Connection string: postgresql://{user}:{password}@{host}:{port}/{dbname}")
+    if pgvector_available:
+        # Create documents table with vector support
+        print("Creating documents table with vector support...")
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS documents (
+            document_id SERIAL PRIMARY KEY,
+            title VARCHAR(200) NOT NULL,
+            content TEXT NOT NULL,
+            metadata JSONB,
+            embedding VECTOR(1536),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+
+        # Create index on embedding
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS documents_embedding_idx ON documents USING ivfflat (embedding vector_cosine_ops)
+        """)
+    else:
+        # Create documents table without vector support
+        print("Creating documents table without vector support (pgvector not available)...")
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS documents (
+            document_id SERIAL PRIMARY KEY,
+            title VARCHAR(200) NOT NULL,
+            content TEXT NOT NULL,
+            metadata JSONB,
+            embedding_json JSONB,  -- Store embeddings as JSON array instead of vector
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+
+        # Create index on title for basic search
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS documents_title_idx ON documents USING btree (title)
+        """)
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    print(f"Vector database setup completed successfully!")
+    print(f"Vector DB Connection string: postgresql://{vector_user}:{vector_password}@{vector_host}:{vector_port}/{vector_dbname}")
+
+    # Setup SQL RAG Database
+    print("\n=== Setting up SQL RAG Database ===")
+    create_database(sql_rag_host, sql_rag_port, sql_rag_user, sql_rag_password, sql_rag_dbname)
+
+    # Create complex schema for SQL RAG
+    create_complex_schema(sql_rag_host, sql_rag_port, sql_rag_user, sql_rag_password, sql_rag_dbname)
+
+    # Insert sample data for SQL RAG
+    insert_sample_data(sql_rag_host, sql_rag_port, sql_rag_user, sql_rag_password, sql_rag_dbname)
+
+    print(f"SQL RAG database setup completed successfully!")
+    print(f"SQL RAG DB Connection string: postgresql://{sql_rag_user}:{sql_rag_password}@{sql_rag_host}:{sql_rag_port}/{sql_rag_dbname}")
 
 
 if __name__ == "__main__":

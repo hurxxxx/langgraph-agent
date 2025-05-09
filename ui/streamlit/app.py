@@ -141,9 +141,10 @@ def create_supervisor(config_options: Dict[str, Any]) -> Supervisor:
     if config_options.get("use_image_agent", False):
         agents["image_generation_agent"] = ImageGenerationAgent(
             config=ImageGenerationAgentConfig(
-                provider=config_options.get("image_provider", "dalle"),  # Changed from "openai" to "dalle"
+                provider=config_options.get("image_provider", "gpt-image"),  # Updated to use gpt-image-1 by default
                 llm_provider=config_options.get("llm_provider", "openai"),
                 openai_model=config_options.get("openai_model", "gpt-4o"),
+                gpt_image_model="gpt-image-1",
                 save_images=True
             )
         )

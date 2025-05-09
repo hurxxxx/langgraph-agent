@@ -40,8 +40,8 @@ def initialize_agents():
 
     image_generation_agent = ImageGenerationAgent(
         config=ImageGenerationAgentConfig(
-            provider="dalle",
-            dalle_model="dall-e-3",
+            provider="gpt-image",
+            gpt_image_model="gpt-image-1",
             image_size="1024x1024"
         )
     )

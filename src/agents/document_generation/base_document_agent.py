@@ -90,7 +90,8 @@ class BaseDocumentAgentConfig(BaseModel):
     """Configuration for the base document generation agent."""
     llm_provider: Literal["openai", "anthropic"] = "openai"
     openai_model: str = "gpt-4o"
-    anthropic_model: str = "claude-3-opus-20240229"
+    anthropic_model: str = "claude-3-7-sonnet-20250219"
+    anthropic_reasoning_model: str = "claude-3-7-haiku-20250201"
     temperature: float = 0
     streaming: bool = True
     max_tokens: int = 4000
@@ -101,13 +102,13 @@ class BaseDocumentAgentConfig(BaseModel):
     # System messages
     system_message: str = """
     You are a document generation agent that creates well-structured documents based on user requirements.
-    
+
     Your job is to:
     1. Understand the document requirements
     2. Generate a document with appropriate structure and content
     3. Format the document according to the specified style
     4. Provide the document content and any relevant metadata
-    
+
     Always ensure that the document is well-organized, coherent, and meets the user's requirements.
     """
 
@@ -125,7 +126,7 @@ class BaseDocumentAgent:
             config: Configuration for the document generation agent
         """
         self.config = config
-        
+
         # Initialize LLM
         try:
             self.llm = ChatOpenAI(
@@ -140,14 +141,14 @@ class BaseDocumentAgent:
                 def invoke(self, messages):
                     return {"content": f"Mock response about document generation"}
             self.llm = MockLLM()
-        
+
         # Create prompt template
         self.prompt = ChatPromptTemplate.from_messages([
             SystemMessage(content=config.system_message),
             MessagesPlaceholder(variable_name="messages"),
             SystemMessage(content="Document format: {document_format}")
         ])
-        
+
         # Ensure document and metadata directories exist
         if self.config.save_documents:
             self.documents_dir = ensure_directory_exists(self.config.documents_dir)
@@ -167,7 +168,7 @@ class BaseDocumentAgent:
         """
         # This is a simplified implementation
         # In a real system, you would use the LLM to extract the requirements
-        
+
         # Default requirements
         requirements = {
             "title": "Untitled Document",
@@ -177,19 +178,19 @@ class BaseDocumentAgent:
             "include_references": False,
             "include_appendices": False
         }
-        
+
         # Extract title if specified
         if "title:" in message.lower():
             title_line = [line for line in message.split("\n") if "title:" in line.lower()]
             if title_line:
                 requirements["title"] = title_line[0].split("title:")[1].strip()
-        
+
         # Extract style if specified
         if "style:" in message.lower():
             style_line = [line for line in message.split("\n") if "style:" in line.lower()]
             if style_line:
                 requirements["style"] = style_line[0].split("style:")[1].strip()
-        
+
         # Extract sections if specified
         if "sections:" in message.lower():
             sections_start = message.lower().find("sections:")
@@ -197,12 +198,12 @@ class BaseDocumentAgent:
             sections = sections_text.split("sections:")[1].strip()
             if sections:
                 requirements["sections"] = [s.strip() for s in sections.split(",")]
-        
+
         # Extract other options
         requirements["include_toc"] = "table of contents" in message.lower() or "toc" in message.lower()
         requirements["include_references"] = "references" in message.lower() or "bibliography" in message.lower()
         requirements["include_appendices"] = "appendix" in message.lower() or "appendices" in message.lower()
-        
+
         return requirements
 
     def _save_document(self, content: str, format: DocumentFormat) -> Dict[str, Any]:
@@ -221,7 +222,7 @@ class BaseDocumentAgent:
                 "file_path": None,
                 "metadata_path": None
             }
-        
+
         try:
             # Generate a unique filename
             file_path = generate_unique_filename(
@@ -229,11 +230,11 @@ class BaseDocumentAgent:
                 prefix=format.title.replace(" ", "_").lower(),
                 extension=".md"
             )
-            
+
             # Save the document
             with open(file_path, "w") as f:
                 f.write(content)
-            
+
             # Create metadata
             metadata = {
                 "title": format.title,
@@ -246,14 +247,14 @@ class BaseDocumentAgent:
                 "created_at": time.time(),
                 "file_path": file_path
             }
-            
+
             # Save metadata
             metadata_path = os.path.join(
                 self.metadata_dir,
                 f"{os.path.basename(file_path).split('.')[0]}.json"
             )
             save_metadata(metadata, metadata_path)
-            
+
             return {
                 "file_path": file_path,
                 "metadata_path": metadata_path
@@ -278,10 +279,10 @@ class BaseDocumentAgent:
         """
         # Extract document requirements
         requirements = self._extract_document_requirements(message)
-        
+
         # Create document format
         document_format = DocumentFormat(**requirements)
-        
+
         # Generate document content
         response = self.llm.invoke(
             self.prompt.format(
@@ -289,7 +290,7 @@ class BaseDocumentAgent:
                 document_format=document_format.model_dump_json()
             )
         )
-        
+
         # Extract content
         if isinstance(response, dict):
             content = response.get("content", "")
@@ -297,10 +298,10 @@ class BaseDocumentAgent:
             content = response.content
         else:
             content = str(response)
-        
+
         # Save document if configured
         save_result = self._save_document(content, document_format)
-        
+
         # Create result
         result = DocumentGenerationResult(
             content=content,
@@ -309,7 +310,7 @@ class BaseDocumentAgent:
             file_path=save_result.get("file_path"),
             metadata_path=save_result.get("metadata_path")
         )
-        
+
         return result
 
     def __call__(self, state: Dict[str, Any]) -> Dict[str, Any]:
@@ -324,11 +325,11 @@ class BaseDocumentAgent:
         """
         # Extract the message from the last message
         message = state["messages"][-1]["content"]
-        
+
         # Generate document
         try:
             result = self.generate_document(message)
-            
+
             # Format the result for the LLM
             formatted_result = f"""
             Document generated successfully!
@@ -336,16 +337,16 @@ class BaseDocumentAgent:
             Style: {result.format.style}
             Word Count: {result.word_count}
             """
-            
+
             if result.file_path:
                 formatted_result += f"\nSaved to: {result.file_path}"
-            
+
             error = None
         except Exception as e:
             formatted_result = f"Error generating document: {str(e)}"
             error = str(e)
             result = None
-        
+
         # Generate response using LLM
         response = self.llm.invoke(
             self.prompt.format(
@@ -353,15 +354,15 @@ class BaseDocumentAgent:
                 document_format=formatted_result
             )
         )
-        
+
         # Update state
         if result:
             state["agent_outputs"]["document_generation"] = result.model_dump()
         else:
             state["agent_outputs"]["document_generation"] = {"error": error}
-        
+
         state["messages"].append({"role": "assistant", "content": response.content})
-        
+
         return state
 
 
@@ -369,12 +370,12 @@ class BaseDocumentAgent:
 if __name__ == "__main__":
     # Create document generation agent
     document_agent = BaseDocumentAgent()
-    
+
     # Test with a document generation request
     state = {
         "messages": [{"role": "user", "content": "Generate a report about climate change with sections: Introduction, Current Trends, Future Projections, Mitigation Strategies, Conclusion"}],
         "agent_outputs": {}
     }
-    
+
     updated_state = document_agent(state)
     print(updated_state["messages"][-1]["content"])

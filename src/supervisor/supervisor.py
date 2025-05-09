@@ -41,6 +41,7 @@ class SupervisorConfig:
         openai_reasoning_model="o3",  # Specialized reasoning model
         openai_efficient_model="o3-mini",  # More efficient model for simpler tasks
         anthropic_model="claude-3-7-sonnet-20250219",  # Updated to Claude 3.7
+        anthropic_reasoning_model="claude-3-7-haiku-20250201",  # Claude reasoning model
         temperature=0,
         streaming=True,
         system_message=None,

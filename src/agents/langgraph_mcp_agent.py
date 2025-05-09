@@ -49,7 +49,10 @@ class LangGraphMCPAgentConfig:
     """Configuration for the LangGraph-style MCP agent."""
     llm_provider: str = "openai"
     openai_model: str = "gpt-4o"
-    anthropic_model: str = "claude-3-opus-20240229"
+    openai_reasoning_model: str = "o3"
+    openai_efficient_model: str = "o3-mini"
+    anthropic_model: str = "claude-3-7-sonnet-20250219"
+    anthropic_reasoning_model: str = "claude-3-7-haiku-20250201"
     temperature: float = 0
     streaming: bool = True
     max_nodes: int = 10
