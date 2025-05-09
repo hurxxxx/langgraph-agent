@@ -21,6 +21,7 @@ This catalog lists all the documentation created for the multi-agent supervisor 
 | Streaming Support | `docs/learning/streaming_support.md` | Details how to implement streaming responses in a multi-agent system built with LangGraph, including both server and client implementations. |
 | Serper API Integration | `docs/learning/serper_integration.md` | Provides information about integrating Serper API with LangGraph for web search capabilities, including API reference and best practices. |
 | UI Testing Strategy | `docs/UI_TESTING_STRATEGY.md` | Outlines the strategy for UI testing and continuous improvement, including Streamlit test interfaces, Playwright automated testing, and quality evaluation processes. |
+| UI Testing Results | `docs/UI_TESTING_RESULTS.md` | Summarizes the results of UI testing, identifies issues, and provides recommendations for improvements with a detailed plan for addressing each issue. |
 
 
 ## Code Documentation
