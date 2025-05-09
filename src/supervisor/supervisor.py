@@ -282,9 +282,46 @@ class Supervisor:
         Returns:
             str: Synthesized response
         """
+        # Check if this is a news-related query
+        query = messages[0]["content"] if messages and len(messages) > 0 else ""
+
+        # Check for news-related queries with time references
+        news_patterns = [
+            r'\bnews\b', r'\breport\b', r'\bheadlines\b', r'\barticles\b',
+            r'뉴스', r'기사', r'소식', r'보도', r'헤드라인', r'속보'
+        ]
+
+        time_patterns = [
+            r'\btoday\b', r'\bcurrent\b', r'\blatest\b', r'\brecent\b',
+            r'\bnow\b', r'\bthis\s+day\b', r'\byesterday\b', r'\blast\s+day\b',
+            r'\bthis\s+week\b', r'\bcurrent\s+week\b', r'\blast\s+few\s+days\b',
+            r'오늘', r'금일', r'당일', r'현재', r'최신', r'최근', r'어제', r'전일',
+            r'이번\s*주', r'금주', r'이\s*주', r'지난\s*주'
+        ]
+
+        # Check if this is a news query with time reference
+        is_news_query = any(re.search(pattern, query, re.IGNORECASE) for pattern in news_patterns)
+        has_time_ref = any(re.search(pattern, query, re.IGNORECASE) for pattern in time_patterns)
+
+        # Create system message with appropriate instructions
+        system_message = self.config.system_message
+
+        if is_news_query:
+            system_message += """
+
+            This is a news-related query. Your response should:
+            1. Organize information by topic, category, or section
+            2. Include specific details, facts, figures, and quotes
+            3. Mention publication dates when available
+            4. Provide a comprehensive and detailed response (at least 300-500 words)
+            5. For Korean news, maintain the same level of detail as for English news
+
+            Format your response with clear sections and subsections.
+            """
+
         # Create a prompt for the LLM to synthesize a response
         prompt = f"""
-        System: {self.config.system_message}
+        System: {system_message}
 
         You need to synthesize a final response based on the outputs from various agents.
 
@@ -323,6 +360,30 @@ class Supervisor:
         if not self.config.use_mcp or self.mcp_agent is None:
             return 0.0, False
 
+        # Check for news-related queries with time references
+        news_patterns = [
+            r'\bnews\b', r'\breport\b', r'\bheadlines\b', r'\barticles\b',
+            r'뉴스', r'기사', r'소식', r'보도', r'헤드라인', r'속보'
+        ]
+
+        time_patterns = [
+            r'\btoday\b', r'\bcurrent\b', r'\blatest\b', r'\brecent\b',
+            r'\bnow\b', r'\bthis\s+day\b', r'\byesterday\b', r'\blast\s+day\b',
+            r'\bthis\s+week\b', r'\bcurrent\s+week\b', r'\blast\s+few\s+days\b',
+            r'오늘', r'금일', r'당일', r'현재', r'최신', r'최근', r'어제', r'전일',
+            r'이번\s*주', r'금주', r'이\s*주', r'지난\s*주'
+        ]
+
+        # Check if this is a news query with time reference
+        is_news_query = any(re.search(pattern, query, re.IGNORECASE) for pattern in news_patterns)
+        has_time_ref = any(re.search(pattern, query, re.IGNORECASE) for pattern in time_patterns)
+
+        # For news queries with time references, we want to use the MCP agent
+        # to coordinate multiple search providers and organize results
+        if is_news_query and has_time_ref:
+            print(f"Detected news query with time reference: {query}")
+            return 0.8, True  # High complexity score to trigger MCP
+
         # Create a prompt for the LLM to assess task complexity
         prompt = f"""
         System: You are an AI assistant that evaluates the complexity of tasks.
@@ -334,6 +395,7 @@ class Supervisor:
         - Does it involve different types of operations (search, analysis, generation, etc.)?
         - Would it benefit from being broken down into smaller tasks?
         - Does it require coordination between different specialized agents?
+        - For news-related queries, consider if multiple sources or perspectives are needed
 
         Respond with just a number between 0 and 1, where:
         - 0: Simple task that can be handled by a single agent

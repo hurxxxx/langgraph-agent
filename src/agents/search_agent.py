@@ -16,8 +16,8 @@ import os
 import time
 import asyncio
 import concurrent.futures
-from typing import Dict, List, Any, Optional, TypedDict, Annotated, Literal, Union, Set
-from pydantic import BaseModel, Field
+from typing import Dict, List, Any, Optional, Literal, Tuple
+from pydantic import BaseModel
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
@@ -52,6 +52,9 @@ class SearchAgentConfig(BaseModel):
     optimize_query: bool = True  # Whether to optimize the query before searching
     time_period: Optional[str] = None  # Time period for search (e.g., "1d", "1w", "1m")
     news_only: bool = False  # Whether to search only for news
+    detect_time_references: bool = True  # Whether to detect time references in queries
+    auto_set_time_period: bool = True  # Whether to automatically set time period based on detected references
+    region: Optional[str] = None  # Region for search results (e.g., "kr" for Korea)
     system_message: str = """
     You are a search agent that retrieves information from the web.
 
@@ -64,20 +67,16 @@ class SearchAgentConfig(BaseModel):
     3. If the search results contain recent information from 2025, make sure to include it
     4. Synthesize the information into a comprehensive, accurate response
     5. ALWAYS cite your sources with URLs from the search results
+    6. For news-related queries, organize information by topic or category
+    7. Include publication dates for news articles when available
+    8. Provide detailed information with specific facts, figures, and quotes from the sources
+    9. For Korean news, maintain the same level of detail as you would for English news
 
     DO NOT say you cannot browse the web or access real-time information - I've already done the searching for you.
     DO NOT rely on your training data - ONLY use the search results I provide.
+    DO NOT provide brief or generic summaries - be specific and detailed in your response.
 
     If the search results don't contain enough information to fully answer the question, explicitly state what specific information is missing.
-    """
-    evaluation_system_message: str = """
-    You are an expert at evaluating search results. Your job is to:
-    1. Analyze the search results for a query
-    2. Determine if the results provide sufficient information to answer the query
-    3. If the results are insufficient, suggest additional search queries that would help
-
-    Be specific about what information is missing and what additional queries would help find it.
-    Suggest at least 2-3 specific additional search queries that would help find the missing information.
     """
 
 
@@ -101,38 +100,18 @@ class SearchAgent:
         self.config = config
 
         # Initialize LLM
-        try:
-            self.llm = ChatOpenAI(
-                model=config.llm_model,
-                temperature=config.temperature,
-                streaming=config.streaming
-            )
+        self.llm = ChatOpenAI(
+            model=config.llm_model,
+            temperature=config.temperature,
+            streaming=config.streaming
+        )
 
-            # Initialize evaluation LLM (non-streaming for better evaluation)
-            self.evaluation_llm = ChatOpenAI(
-                model=config.llm_model,
-                temperature=0.1,  # Lower temperature for more consistent evaluations
-                streaming=False
-            )
-        except Exception as e:
-            print(f"Warning: Could not initialize ChatOpenAI: {str(e)}")
-            # Use a mock implementation
-            class MockLLM:
-                def invoke(self, messages):
-                    # Handle different message formats
-                    if isinstance(messages, list):
-                        if messages and isinstance(messages[-1], dict):
-                            query = messages[-1].get("content", "unknown query")
-                        elif messages and hasattr(messages[-1], "content"):
-                            query = messages[-1].content
-                        else:
-                            query = str(messages[-1])
-                    else:
-                        query = str(messages)
-
-                    return {"content": f"Here are the search results for: {query}"}
-            self.llm = MockLLM()
-            self.evaluation_llm = MockLLM()
+        # Initialize evaluation LLM (non-streaming for better evaluation)
+        self.evaluation_llm = ChatOpenAI(
+            model=config.llm_model,
+            temperature=0.1,  # Lower temperature for more consistent evaluations
+            streaming=False
+        )
 
         # Initialize search tools for all providers
         self.search_tools = {}
@@ -147,19 +126,23 @@ class SearchAgent:
             if tool:
                 self.search_tools[config.default_provider] = tool
 
-        # Create a simpler prompt template
+        # Create a more detailed prompt template for synthesizing search results
         self.prompt = ChatPromptTemplate.from_messages([
-            SystemMessage(content="You are a helpful assistant that answers questions based on search results."),
+            SystemMessage(content="""
+            You are a helpful assistant that answers questions based on search results.
+
+            For news-related queries:
+            1. Organize information by topic, category, or section
+            2. Include specific details, facts, figures, and quotes
+            3. Mention publication dates when available
+            4. Provide a comprehensive and detailed response
+            5. For Korean news, maintain the same level of detail as for English news
+
+            Always cite your sources with URLs from the search results.
+            """),
             HumanMessage(content="I want to know: {query}"),
             AIMessage(content="I'll help you with that. Let me search for information..."),
-            HumanMessage(content="Here are the search results:\n\n{search_results}\n\nBased on ONLY these search results, please answer my question about {query}.")
-        ])
-
-        self.evaluation_prompt = ChatPromptTemplate.from_messages([
-            SystemMessage(content=config.evaluation_system_message),
-            SystemMessage(content="Original query: {query}"),
-            SystemMessage(content="Search results: {search_results}"),
-            HumanMessage(content="Are these search results sufficient to answer the query? If not, what additional search queries would help?")
+            HumanMessage(content="Here are the search results:\n\n{search_results}\n\nBased on ONLY these search results, please provide a detailed and comprehensive answer to my question about {query}.")
         ])
 
     def _load_config_from_env(self) -> SearchAgentConfig:
@@ -193,6 +176,9 @@ class SearchAgent:
         optimize_query = os.getenv("SEARCH_OPTIMIZE_QUERY", "true").lower() == "true"
         time_period = os.getenv("SEARCH_TIME_PERIOD", None)
         news_only = os.getenv("SEARCH_NEWS_ONLY", "false").lower() == "true"
+        detect_time_references = os.getenv("SEARCH_DETECT_TIME_REFERENCES", "true").lower() == "true"
+        auto_set_time_period = os.getenv("SEARCH_AUTO_SET_TIME_PERIOD", "true").lower() == "true"
+        region = os.getenv("SEARCH_REGION", None)
 
         return SearchAgentConfig(
             providers=providers,
@@ -202,7 +188,10 @@ class SearchAgent:
             additional_queries=additional_queries,
             optimize_query=optimize_query,
             time_period=time_period,
-            news_only=news_only
+            news_only=news_only,
+            detect_time_references=detect_time_references,
+            auto_set_time_period=auto_set_time_period,
+            region=region
         )
 
     def _initialize_search_tool(self, provider: str) -> Any:
@@ -239,9 +228,20 @@ class SearchAgent:
 
                 # Set to news only if specified
                 if self.config.news_only:
-                    params["include_domains"] = ["news.google.com", "bbc.com", "cnn.com", "reuters.com",
-                                               "nytimes.com", "washingtonpost.com", "theguardian.com",
-                                               "apnews.com", "bloomberg.com", "ft.com", "wsj.com"]
+                    # Default news domains
+                    news_domains = ["news.google.com", "bbc.com", "cnn.com", "reuters.com",
+                                  "nytimes.com", "washingtonpost.com", "theguardian.com",
+                                  "apnews.com", "bloomberg.com", "ft.com", "wsj.com"]
+
+                    # Add Korean news domains if region is Korea
+                    if self.config.region == "kr":
+                        korean_news_domains = ["news.naver.com", "news.daum.net", "yna.co.kr",
+                                             "chosun.com", "joongang.co.kr", "donga.com",
+                                             "hani.co.kr", "mk.co.kr", "hankyung.com",
+                                             "mt.co.kr", "sedaily.com", "edaily.co.kr"]
+                        news_domains.extend(korean_news_domains)
+
+                    params["include_domains"] = news_domains
 
                 tavily_tool = TavilySearchResults(**params)
                 print(f"Successfully initialized Tavily search tool with API key: {api_key[:5]}...")
@@ -269,8 +269,12 @@ class SearchAgent:
 
                 # Set to news only if specified
                 if self.config.news_only:
-                    params["gl"] = "us"  # Set region to US for more news results
+                    # Set region based on config or default to US
+                    params["gl"] = self.config.region or "us"
                     params["search_type"] = "news"
+                elif self.config.region:
+                    # Set region if specified in config
+                    params["gl"] = self.config.region
 
                 search = GoogleSerperAPIWrapper(**params)
 
@@ -403,10 +407,7 @@ class SearchAgent:
         Returns:
             List[SearchResult]: Search results
         """
-        print(f"Searching with provider: {provider}, query: {query}")
-
         if provider not in self.search_tools:
-            print(f"Provider {provider} is not available in search_tools")
             return [SearchResult(
                 title="Provider Error",
                 url="",
@@ -420,12 +421,9 @@ class SearchAgent:
 
         while retry_count < max_retries:
             try:
-                print(f"Invoking search tool for {provider}...")
                 raw_results = search_tool.invoke(query)
-                print(f"Got raw results from {provider}: {type(raw_results)}")
 
                 if raw_results is None:
-                    print(f"Warning: {provider} returned None")
                     raw_results = []
 
                 # Handle different return types from different providers
@@ -433,19 +431,16 @@ class SearchAgent:
                     if provider == "serper":
                         # Serper returns a dictionary with organic results
                         if isinstance(raw_results, dict) and "organic" in raw_results:
-                            print(f"Extracting organic results from Serper response")
                             raw_results = raw_results["organic"]
                         elif isinstance(raw_results, dict) and "error" in raw_results:
                             # Handle Serper API error
                             error_msg = raw_results.get("error", "Unknown Serper API error")
-                            print(f"Serper API error: {error_msg}")
 
                             # Check if it's a rate limit error (common with API services)
                             if "rate limit" in error_msg.lower() or "quota" in error_msg.lower():
                                 # This is a transient error, retry after a delay
                                 retry_count += 1
                                 if retry_count < max_retries:
-                                    print(f"Rate limit hit, retrying in {retry_count} seconds...")
                                     time.sleep(retry_count)  # Exponential backoff
                                     continue
 
@@ -457,24 +452,15 @@ class SearchAgent:
                                 provider=provider
                             )]
                         else:
-                            print(f"Converting single result to list for {provider}")
                             raw_results = [raw_results]
                     else:
-                        print(f"Converting single result to list for {provider}")
                         raw_results = [raw_results]
 
                 formatted_results = self._format_search_results(raw_results, provider)
-                print(f"Formatted {len(formatted_results)} results from {provider}")
                 return formatted_results
 
             except Exception as e:
                 last_error = e
-                print(f"Search error with {provider} (attempt {retry_count + 1}/{max_retries}): {str(e)}")
-
-                # Print detailed traceback for debugging
-                import traceback
-                print(f"Detailed error traceback for {provider}:")
-                traceback.print_exc()
 
                 # Check if it's a connection error or timeout (common transient errors)
                 error_str = str(e).lower()
@@ -486,7 +472,6 @@ class SearchAgent:
                 if is_transient and retry_count < max_retries - 1:
                     # This is a transient error, retry after a delay
                     retry_count += 1
-                    print(f"Transient error, retrying in {retry_count} seconds...")
                     time.sleep(retry_count)  # Exponential backoff
                 else:
                     # Non-transient error or max retries reached
@@ -494,17 +479,14 @@ class SearchAgent:
 
         # If we get here, all retries failed
         error_message = str(last_error) if last_error else "Unknown search error"
-        print(f"Search with {provider} failed after {max_retries} attempts: {error_message}")
 
         # Return a helpful error message as a search result
-        error_result = SearchResult(
+        return [SearchResult(
             title="Search Error",
             url="",
             snippet=f"Error performing search with {provider}: {error_message}. Please try again later.",
             provider=provider
-        )
-        print(f"Returning error result for {provider}: {error_result}")
-        return [error_result]
+        )]
 
     async def _search_with_provider_async(self, query: str, provider: str, max_retries: int = 3) -> List[SearchResult]:
         """
@@ -552,9 +534,98 @@ class SearchAgent:
 
         return all_results
 
+    def detect_time_references(self, query: str) -> Tuple[bool, Optional[str]]:
+        """
+        Detect time references in a query and determine the appropriate time period.
+        Uses LLM to analyze the query instead of hardcoded patterns.
+
+        Args:
+            query: Search query
+
+        Returns:
+            Tuple[bool, Optional[str]]:
+                - Whether a time reference was detected
+                - The detected time period (e.g., "1d", "1w", "1m")
+        """
+        if not self.config.detect_time_references:
+            return False, None
+
+        # Use LLM to analyze the query for time references
+        system_content = """
+        You are an expert at analyzing search queries for time references.
+        Analyze the query and determine if it contains time references like:
+        - Today, current, latest, recent, now
+        - Yesterday, last day
+        - This week, current week, last few days, past week
+        - This month, current month, last month, last 30 days
+        - News-related terms (news, report, headlines, articles)
+        - Korean time references (오늘, 어제, 이번 주, 이번 달, 뉴스, etc.)
+
+        Return a JSON with these fields:
+        - has_time_reference: true/false
+        - time_period: "1d" for today/yesterday, "1w" for this week, "1m" for this month, or null
+        - reason: brief explanation of why you determined this
+        """
+
+        try:
+            # Use a lower temperature for more consistent results
+            response = self.evaluation_llm.invoke([
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": f"Query: {query}"}
+            ])
+
+            # Extract content from response
+            if isinstance(response, dict):
+                content = response.get("content", "")
+            elif hasattr(response, "content"):
+                content = response.content
+            else:
+                content = str(response)
+
+            # Try to parse JSON from the response
+            import json
+
+            # Try to parse the entire content as JSON first
+            try:
+                result = json.loads(content)
+                has_time_ref = result.get("has_time_reference", False)
+                time_period = result.get("time_period")
+
+                if has_time_ref and time_period:
+                    return True, time_period
+            except json.JSONDecodeError:
+                # If that fails, try to extract JSON from the text
+                start_idx = content.find('{')
+                end_idx = content.rfind('}')
+
+                if start_idx != -1 and end_idx != -1 and start_idx < end_idx:
+                    try:
+                        json_str = content[start_idx:end_idx+1]
+                        result = json.loads(json_str)
+                        has_time_ref = result.get("has_time_reference", False)
+                        time_period = result.get("time_period")
+
+                        if has_time_ref and time_period:
+                            return True, time_period
+                    except json.JSONDecodeError:
+                        pass
+
+            # Fallback for news queries
+            if "news" in query.lower() or "뉴스" in query:
+                return True, "1d"
+
+            return False, None
+
+        except Exception:
+            # Fallback to a simple check for news-related terms
+            if "news" in query.lower() or "뉴스" in query:
+                return True, "1d"
+            return False, None
+
     def optimize_query(self, query: str) -> List[str]:
         """
-        Optimize a search query to improve search results.
+        Optimize a search query to improve search results using LLM.
+        Uses time_period option instead of adding dates to queries.
 
         Args:
             query: Original search query
@@ -566,24 +637,57 @@ class SearchAgent:
             return [query]
 
         try:
-            # Create messages for query optimization
+            # Detect time references
+            has_time_ref, time_period = self.detect_time_references(query)
+
+            # If time reference detected and auto_set_time_period is enabled, update config
+            if has_time_ref and self.config.auto_set_time_period:
+                self.config.time_period = time_period
+
+                # Check if this is a news query using LLM
+                news_check_prompt = f"Is this query about news or current events? Query: '{query}'. Answer only 'yes' or 'no'."
+                news_response = self.evaluation_llm.invoke([{"role": "user", "content": news_check_prompt}])
+
+                # Extract content from response
+                if isinstance(news_response, dict):
+                    news_content = news_response.get("content", "").lower()
+                elif hasattr(news_response, "content"):
+                    news_content = news_response.content.lower()
+                else:
+                    news_content = str(news_response).lower()
+
+                is_news_query = "yes" in news_content
+
+                if is_news_query:
+                    self.config.news_only = True
+
+                    # Increase max_results for news queries to get more comprehensive results
+                    original_max_results = self.config.max_results
+                    self.config.max_results = max(10, original_max_results)
+
+            # Use LangChain's query optimization capabilities
+            system_content = """
+            You are an expert at optimizing search queries. Your job is to:
+            1. Analyze the user's search intent
+            2. Extract key concepts and terms
+            3. Generate 3-5 optimized search queries that will yield better results
+
+            For each query type:
+            - News queries: Focus on specific topics, sources, and relevant keywords
+            - Technical queries: Include specific technologies, frameworks, and problem descriptions
+            - General knowledge: Focus on precise terminology and alternative phrasings
+
+            IMPORTANT: DO NOT include dates or years in the queries. The search system will handle time filtering automatically.
+
+            Return ONLY the optimized queries, one per line, without any explanation or numbering.
+            """
+
+            # Use the LLM to generate optimized queries
             messages = [
-                SystemMessage(content="""
-                You are an expert at optimizing search queries. Your job is to:
-                1. Analyze the user's search intent
-                2. Extract key concepts and terms
-                3. Generate 2-3 optimized search queries that will yield better results
-
-                For news-related queries, focus on extracting specific topics, names, and events.
-                For technical queries, focus on specific technologies, problems, and solutions.
-                For general knowledge queries, focus on the core concepts and alternative phrasings.
-
-                Return ONLY the optimized queries, one per line, without any explanation or numbering.
-                """),
-                HumanMessage(content=f"Original query: {query}")
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": f"Original query: {query}"}
             ]
 
-            # Generate optimized queries
             response = self.evaluation_llm.invoke(messages)
 
             # Extract content from response
@@ -597,17 +701,17 @@ class SearchAgent:
             # Split into individual queries
             optimized_queries = [q.strip() for q in content.strip().split('\n') if q.strip()]
 
-            # Add the original query if no optimized queries were generated
+            # Always include the original query
+            if query not in optimized_queries:
+                optimized_queries.append(query)
+
+            # If no optimized queries were generated, just use the original
             if not optimized_queries:
                 optimized_queries = [query]
-            elif query not in optimized_queries:
-                optimized_queries.append(query)  # Always include the original query
 
-            print(f"Optimized queries: {optimized_queries}")
             return optimized_queries
 
-        except Exception as e:
-            print(f"Error optimizing query: {str(e)}")
+        except Exception:
             return [query]  # Return the original query if optimization fails
 
     def search(self, query: str, max_retries: int = 3) -> List[SearchResult]:
@@ -680,6 +784,7 @@ class SearchAgent:
     def evaluate_search_results(self, query: str, results: List[SearchResult]) -> Dict[str, Any]:
         """
         Evaluate search results to determine if they are sufficient or if additional searches are needed.
+        Uses LLM to analyze the results and suggest additional queries if needed.
 
         Args:
             query: Original search query
@@ -688,18 +793,13 @@ class SearchAgent:
         Returns:
             Dict[str, Any]: Evaluation results including sufficiency and additional queries
         """
-        print(f"\nEvaluating search results for query: {query}")
-        print(f"Number of results to evaluate: {len(results)}")
-
         if not self.config.evaluate_results:
-            print("Evaluation disabled in config, skipping")
             return {
                 "sufficient": True,
                 "additional_queries": []
             }
 
         if not results:
-            print("No results found, marking as insufficient")
             # No results, definitely need more
             return {
                 "sufficient": False,
@@ -732,14 +832,34 @@ class SearchAgent:
         print(f"Formatted {len(results)} results for evaluation")
 
         try:
+            # Use a structured prompt for the LLM to evaluate results
+            system_content = """
+            You are an expert at evaluating search results. Your task is to:
+            1. Analyze the search results for the given query
+            2. Determine if the results provide sufficient information to answer the query
+            3. If the results are insufficient, suggest additional search queries
+
+            Return your evaluation as a JSON object with the following structure:
+            {
+                "sufficient": true/false,
+                "reason": "Brief explanation of your assessment",
+                "additional_queries": ["query1", "query2", "query3"]
+            }
+
+            If the results are sufficient, the "additional_queries" array can be empty.
+            If the results are insufficient, suggest 2-3 specific additional queries that would help find the missing information.
+
+            For news-related queries, check if the results are recent and from reliable sources.
+            For technical queries, check if the results provide detailed technical information.
+            For general knowledge queries, check if the results provide comprehensive information.
+            """
+
             # Generate evaluation using LLM
             print("Invoking evaluation LLM...")
-            response = self.evaluation_llm.invoke(
-                self.evaluation_prompt.format(
-                    query=query,
-                    search_results=formatted_results
-                )
-            )
+            response = self.evaluation_llm.invoke([
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": f"Query: {query}\n\nSearch Results:\n{formatted_results}"}
+            ])
 
             # Extract content from response
             if isinstance(response, dict):
@@ -749,10 +869,52 @@ class SearchAgent:
             else:
                 evaluation = str(response)
 
-            print(f"Evaluation response received, length: {len(evaluation)}")
-            print(f"Evaluation summary: {evaluation[:100]}...")
 
-            # Parse the evaluation to determine if results are sufficient
+
+            # Try to parse JSON from the response
+            import json
+
+            # Try to parse the entire content as JSON first
+            try:
+                result = json.loads(evaluation)
+                sufficient = result.get("sufficient", False)
+                reason = result.get("reason", "No reason provided")
+                additional_queries = result.get("additional_queries", [])
+
+                # Limit to 3 additional queries
+                final_queries = additional_queries[:3]
+
+                return {
+                    "sufficient": sufficient,
+                    "evaluation": reason,
+                    "additional_queries": final_queries
+                }
+            except json.JSONDecodeError:
+                # If that fails, try to extract JSON from the text
+                start_idx = evaluation.find('{')
+                end_idx = evaluation.rfind('}')
+
+                if start_idx != -1 and end_idx != -1 and start_idx < end_idx:
+                    try:
+                        json_str = evaluation[start_idx:end_idx+1]
+                        result = json.loads(json_str)
+                        sufficient = result.get("sufficient", False)
+                        reason = result.get("reason", "No reason provided")
+                        additional_queries = result.get("additional_queries", [])
+
+                        # Limit to 3 additional queries
+                        final_queries = additional_queries[:3]
+
+                        return {
+                            "sufficient": sufficient,
+                            "evaluation": reason,
+                            "additional_queries": final_queries
+                        }
+                    except json.JSONDecodeError:
+                        # Fall back to text analysis
+                        pass
+
+            # Fallback: Simple text analysis if JSON parsing fails
             evaluation_lower = evaluation.lower()
             sufficient = (
                 "sufficient" in evaluation_lower or
@@ -765,46 +927,39 @@ class SearchAgent:
                 "need more" in evaluation_lower
             )
 
-            print(f"Results sufficient: {sufficient}")
-
-            # Extract additional queries if results are insufficient
+            # Extract additional queries using simple pattern matching
             additional_queries = []
-            if not sufficient and self.config.additional_queries:
-                print("Results insufficient, extracting additional queries")
-                # Look for suggested queries in the evaluation
+            if not sufficient:
+                # Look for lines that might contain suggested queries
                 lines = evaluation.split('\n')
                 for line in lines:
                     line = line.strip()
-                    if (
-                        "search for" in line.lower() or
-                        "query about" in line.lower() or
-                        "search query" in line.lower() or
-                        "additional query" in line.lower() or
-                        line.startswith('"') and line.endswith('"') or
-                        line.startswith("- ")
-                    ):
-                        # Clean up the line to extract just the query
-                        query_text = line
-                        for prefix in ["search for", "query about", "search query", "additional query", "- "]:
-                            if prefix in query_text.lower():
-                                query_text = query_text.lower().split(prefix, 1)[1].strip()
-
-                        # Remove quotes if present
-                        if query_text.startswith('"') and query_text.endswith('"'):
-                            query_text = query_text[1:-1]
-
-                        if query_text and len(query_text) > 3:  # Minimum query length
-                            additional_queries.append(query_text)
-                            print(f"Added additional query: {query_text}")
+                    if line and len(line) > 10 and not line.startswith('{') and not line.startswith('}'):
+                        # Skip lines that are likely part of the analysis
+                        if any(term in line.lower() for term in ["sufficient", "evaluation", "analysis", "result"]):
+                            continue
+                        # Add as a potential query if it looks like one
+                        if "?" in line or any(term in line.lower() for term in ["search", "query", "find", "look for"]):
+                            # Clean up the line
+                            query_text = line
+                            # Remove common prefixes
+                            for prefix in ["search for", "query about", "search query", "additional query", "- "]:
+                                if prefix in query_text.lower():
+                                    query_text = query_text.lower().split(prefix, 1)[1].strip()
+                            # Remove quotes if present
+                            if query_text.startswith('"') and query_text.endswith('"'):
+                                query_text = query_text[1:-1]
+                            # Add if it's a reasonable length
+                            if query_text and len(query_text) > 3:
+                                additional_queries.append(query_text)
 
             # If no additional queries were found but results are insufficient, add a default one
             if not additional_queries and not sufficient:
-                default_query = f"latest information about {query} in 2025"
+                default_query = f"latest information about {query}"
                 additional_queries.append(default_query)
-                print(f"No specific additional queries found, adding default: {default_query}")
 
-            final_queries = additional_queries[:3]  # Limit to 3 additional queries
-            print(f"Final additional queries: {final_queries}")
+            # Limit to 3 additional queries
+            final_queries = additional_queries[:3]
 
             return {
                 "sufficient": sufficient,
@@ -813,10 +968,6 @@ class SearchAgent:
             }
 
         except Exception as e:
-            print(f"Error evaluating search results: {str(e)}")
-            import traceback
-            traceback.print_exc()
-
             # Default to insufficient with a generic additional query if evaluation fails
             return {
                 "sufficient": False,
@@ -865,7 +1016,6 @@ class SearchAgent:
         all_queries = [query]  # Track all queries used
 
         for additional_query in evaluation["additional_queries"]:
-            print(f"Performing additional search: {additional_query}")
             additional_results = self.search(additional_query, max_retries)
             all_results.extend(additional_results)
             all_queries.append(additional_query)
@@ -905,7 +1055,6 @@ class SearchAgent:
                 if "description" in subtask:
                     # Use the subtask description as the query
                     query = subtask["description"]
-                    print(f"Using subtask description as query: {query}")
 
             # Perform search with evaluation and additional searches if needed
             search_data = self.perform_search_with_evaluation(query)
@@ -940,32 +1089,42 @@ class SearchAgent:
             formatted_results += "=== END OF SEARCH RESULTS ===\n\n"
             formatted_results += "IMPORTANT: Use ONLY the information from these search results to answer the user's question."
 
-            # Print formatted results for debugging
-            print("\nFormatted search results for LLM:")
-            print(formatted_results[:500] + "..." if len(formatted_results) > 500 else formatted_results)
-
             # Generate response using LLM with simplified prompt
             try:
+                # Determine if this is a news-related query
+                is_news_query = self.config.news_only or any(term in query.lower() for term in [
+                    'news', 'report', 'headlines', 'articles', 'latest', 'today', 'current',
+                    '뉴스', '기사', '소식', '보도', '헤드라인', '속보', '오늘', '최신'
+                ])
+
+                # Create system message with appropriate instructions
+                system_content = """
+                You are a helpful assistant that answers questions based on search results.
+                """
+
+                if is_news_query:
+                    system_content += """
+                    This is a news-related query. Your response should:
+                    1. Organize information by topic, category, or section
+                    2. Include specific details, facts, figures, and quotes
+                    3. Mention publication dates when available
+                    4. Provide a comprehensive and detailed response (at least 300-500 words)
+                    5. For Korean news, maintain the same level of detail as for English news
+
+                    Format your response with clear sections and subsections.
+                    """
+
                 # Create messages directly
                 messages = [
-                    SystemMessage(content="You are a helpful assistant that answers questions based on search results."),
+                    SystemMessage(content=system_content),
                     HumanMessage(content=f"I want to know: {query}"),
                     AIMessage(content="I'll help you with that. Let me search for information..."),
-                    HumanMessage(content=f"Here are the search results:\n\n{formatted_results}\n\nBased on ONLY these search results, please answer my question about {query}.")
+                    HumanMessage(content=f"Here are the search results:\n\n{formatted_results}\n\nBased on ONLY these search results, please provide a detailed and comprehensive answer to my question about {query}.")
                 ]
-
-                # Print prompt for debugging
-                print("\nPrompt for LLM (first 500 chars):")
-                prompt_str = "\n".join([f"{msg.type}: {msg.content[:100]}..." if len(msg.content) > 100 else f"{msg.type}: {msg.content}" for msg in messages])
-                print(prompt_str[:500] + "..." if len(prompt_str) > 500 else prompt_str)
 
                 # Invoke LLM
                 response = self.llm.invoke(messages)
             except Exception as e:
-                print(f"Error creating or invoking prompt: {str(e)}")
-                import traceback
-                traceback.print_exc()
-
                 # Fallback to a simpler prompt
                 response = self.llm.invoke([
                     SystemMessage(content="You are a helpful assistant."),
@@ -1006,14 +1165,9 @@ class SearchAgent:
             state["messages"].append({"role": "assistant", "content": content})
 
         except Exception as e:
-            # Handle errors gracefully
-            error_message = f"Search agent encountered an error: {str(e)}"
-            print(error_message)
-
             # Get detailed error information
             import traceback
             trace = traceback.format_exc()
-            print(f"Detailed error: {trace}")
 
             # Update state with error information
             state["agent_outputs"]["search_agent"] = {
@@ -1036,44 +1190,4 @@ class SearchAgent:
         return state
 
 
-# Example usage
-if __name__ == "__main__":
-    # Load environment variables
-    from dotenv import load_dotenv
-    load_dotenv()
 
-    # Create search agent with configuration from environment variables
-    search_agent = SearchAgent()
-
-    # Print configuration
-    print(f"Search providers: {search_agent.config.providers}")
-    print(f"Default provider: {search_agent.config.default_provider}")
-    print(f"Parallel search: {search_agent.config.parallel_search}")
-    print(f"Evaluate results: {search_agent.config.evaluate_results}")
-    print(f"Additional queries: {search_agent.config.additional_queries}")
-    print(f"Available search tools: {list(search_agent.search_tools.keys())}")
-
-    # Test with a query
-    state = {
-        "messages": [{"role": "user", "content": "What are the latest advancements in quantum computing in 2025?"}],
-        "agent_outputs": {}
-    }
-
-    print("\nPerforming search...")
-    updated_state = search_agent(state)
-
-    # Print search details
-    search_output = updated_state["agent_outputs"]["search_agent"]
-    print(f"\nSearch queries used: {search_output.get('all_queries', ['unknown'])}")
-    print(f"Total results: {len(search_output.get('results', []))}")
-
-    # Print evaluation if available
-    if "evaluation" in search_output:
-        eval_data = search_output["evaluation"]
-        print(f"\nResults sufficient: {eval_data.get('sufficient', True)}")
-        if "additional_queries" in eval_data and eval_data["additional_queries"]:
-            print(f"Additional queries suggested: {eval_data['additional_queries']}")
-
-    # Print response
-    print("\nResponse:")
-    print(updated_state["messages"][-1]["content"])
