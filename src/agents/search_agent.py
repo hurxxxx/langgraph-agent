@@ -203,25 +203,34 @@ class SearchAgent:
                     print("Warning: TAVILY_API_KEY not found in environment")
                     return None
 
-                return TavilySearchResults(
+                # Create Tavily search tool
+                tavily_tool = TavilySearchResults(
                     api_key=api_key,
                     max_results=self.config.max_results
                 )
+                print(f"Successfully initialized Tavily search tool with API key: {api_key[:5]}...")
+                return tavily_tool
             elif provider == "serper":
                 api_key = os.getenv("SERPER_API_KEY")
                 if not api_key:
                     print("Warning: SERPER_API_KEY not found in environment")
                     return None
 
+                # Create Serper search wrapper
                 search = GoogleSerperAPIWrapper(
                     serper_api_key=api_key,
                     k=self.config.max_results
                 )
-                return Tool(
+
+                # Create tool from wrapper
+                serper_tool = Tool(
                     name="Serper Search",
                     description="Search Google using Serper API for recent results.",
                     func=search.run
                 )
+
+                print(f"Successfully initialized Serper search tool with API key: {api_key[:5]}...")
+                return serper_tool
             elif provider == "google":
                 api_key = os.getenv("GOOGLE_API_KEY")
                 cse_id = os.getenv("GOOGLE_CSE_ID")
@@ -325,7 +334,10 @@ class SearchAgent:
         Returns:
             List[SearchResult]: Search results
         """
+        print(f"Searching with provider: {provider}, query: {query}")
+
         if provider not in self.search_tools:
+            print(f"Provider {provider} is not available in search_tools")
             return [SearchResult(
                 title="Provider Error",
                 url="",
@@ -339,13 +351,20 @@ class SearchAgent:
 
         while retry_count < max_retries:
             try:
+                print(f"Invoking search tool for {provider}...")
                 raw_results = search_tool.invoke(query)
+                print(f"Got raw results from {provider}: {type(raw_results)}")
+
+                if raw_results is None:
+                    print(f"Warning: {provider} returned None")
+                    raw_results = []
 
                 # Handle different return types from different providers
                 if not isinstance(raw_results, list):
                     if provider == "serper":
                         # Serper returns a dictionary with organic results
                         if isinstance(raw_results, dict) and "organic" in raw_results:
+                            print(f"Extracting organic results from Serper response")
                             raw_results = raw_results["organic"]
                         elif isinstance(raw_results, dict) and "error" in raw_results:
                             # Handle Serper API error
@@ -369,15 +388,24 @@ class SearchAgent:
                                 provider=provider
                             )]
                         else:
+                            print(f"Converting single result to list for {provider}")
                             raw_results = [raw_results]
                     else:
+                        print(f"Converting single result to list for {provider}")
                         raw_results = [raw_results]
 
-                return self._format_search_results(raw_results, provider)
+                formatted_results = self._format_search_results(raw_results, provider)
+                print(f"Formatted {len(formatted_results)} results from {provider}")
+                return formatted_results
 
             except Exception as e:
                 last_error = e
                 print(f"Search error with {provider} (attempt {retry_count + 1}/{max_retries}): {str(e)}")
+
+                # Print detailed traceback for debugging
+                import traceback
+                print(f"Detailed error traceback for {provider}:")
+                traceback.print_exc()
 
                 # Check if it's a connection error or timeout (common transient errors)
                 error_str = str(e).lower()
@@ -400,12 +428,14 @@ class SearchAgent:
         print(f"Search with {provider} failed after {max_retries} attempts: {error_message}")
 
         # Return a helpful error message as a search result
-        return [SearchResult(
+        error_result = SearchResult(
             title="Search Error",
             url="",
             snippet=f"Error performing search with {provider}: {error_message}. Please try again later.",
             provider=provider
-        )]
+        )
+        print(f"Returning error result for {provider}: {error_result}")
+        return [error_result]
 
     async def _search_with_provider_async(self, query: str, provider: str, max_retries: int = 3) -> List[SearchResult]:
         """
@@ -510,14 +540,18 @@ class SearchAgent:
         Returns:
             Dict[str, Any]: Evaluation results including sufficiency and additional queries
         """
+        print(f"\nEvaluating search results for query: {query}")
+        print(f"Number of results to evaluate: {len(results)}")
+
         if not self.config.evaluate_results:
-            # Skip evaluation if disabled
+            print("Evaluation disabled in config, skipping")
             return {
                 "sufficient": True,
                 "additional_queries": []
             }
 
         if not results:
+            print("No results found, marking as insufficient")
             # No results, definitely need more
             return {
                 "sufficient": False,
@@ -530,8 +564,11 @@ class SearchAgent:
             for result in results
         ])
 
+        print(f"Formatted {len(results)} results for evaluation")
+
         try:
             # Generate evaluation using LLM
+            print("Invoking evaluation LLM...")
             response = self.evaluation_llm.invoke(
                 self.evaluation_prompt.format(
                     query=query,
@@ -547,6 +584,9 @@ class SearchAgent:
             else:
                 evaluation = str(response)
 
+            print(f"Evaluation response received, length: {len(evaluation)}")
+            print(f"Evaluation summary: {evaluation[:100]}...")
+
             # Parse the evaluation to determine if results are sufficient
             evaluation_lower = evaluation.lower()
             sufficient = (
@@ -560,9 +600,12 @@ class SearchAgent:
                 "need more" in evaluation_lower
             )
 
+            print(f"Results sufficient: {sufficient}")
+
             # Extract additional queries if results are insufficient
             additional_queries = []
             if not sufficient and self.config.additional_queries:
+                print("Results insufficient, extracting additional queries")
                 # Look for suggested queries in the evaluation
                 lines = evaluation.split('\n')
                 for line in lines:
@@ -587,20 +630,33 @@ class SearchAgent:
 
                         if query_text and len(query_text) > 3:  # Minimum query length
                             additional_queries.append(query_text)
+                            print(f"Added additional query: {query_text}")
+
+            # If no additional queries were found but results are insufficient, add a default one
+            if not additional_queries and not sufficient:
+                default_query = f"latest information about {query} in 2025"
+                additional_queries.append(default_query)
+                print(f"No specific additional queries found, adding default: {default_query}")
+
+            final_queries = additional_queries[:3]  # Limit to 3 additional queries
+            print(f"Final additional queries: {final_queries}")
 
             return {
                 "sufficient": sufficient,
                 "evaluation": evaluation,
-                "additional_queries": additional_queries[:3]  # Limit to 3 additional queries
+                "additional_queries": final_queries
             }
 
         except Exception as e:
             print(f"Error evaluating search results: {str(e)}")
-            # Default to sufficient if evaluation fails
+            import traceback
+            traceback.print_exc()
+
+            # Default to insufficient with a generic additional query if evaluation fails
             return {
-                "sufficient": True,
+                "sufficient": False,
                 "evaluation": f"Error evaluating results: {str(e)}",
-                "additional_queries": []
+                "additional_queries": [f"more detailed information about {query}"]
             }
 
     def perform_search_with_evaluation(self, query: str, max_retries: int = 3) -> Dict[str, Any]:
