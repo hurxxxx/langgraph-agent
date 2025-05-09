@@ -20,6 +20,7 @@ This catalog lists all the documentation created for the multi-agent supervisor 
 | OpenAPI Integration | `docs/learning/openapi_integration.md` | Explains how to integrate OpenAPI specifications with LangGraph to create standardized APIs for agent interactions. |
 | Streaming Support | `docs/learning/streaming_support.md` | Details how to implement streaming responses in a multi-agent system built with LangGraph, including both server and client implementations. |
 | Serper API Integration | `docs/learning/serper_integration.md` | Provides information about integrating Serper API with LangGraph for web search capabilities, including API reference and best practices. |
+| UI Testing Strategy | `docs/UI_TESTING_STRATEGY.md` | Outlines the strategy for UI testing and continuous improvement, including Streamlit test interfaces, Playwright automated testing, and quality evaluation processes. |
 
 
 ## Code Documentation
@@ -44,6 +45,8 @@ This catalog lists all the documentation created for the multi-agent supervisor 
 | Web Client | `examples/web_client.html` | Provides a simple HTML/JavaScript client for interacting with the multi-agent supervisor API. |
 | Agent Monitor UI | `src/ui/agent_monitor.html` | Enhanced UI for testing and monitoring agent execution with LangSmith integration. |
 | Monitor Runner | `run_monitor.py` | Script to run the application with the monitoring UI in a web browser. |
+| Streamlit Test Interface | `ui/streamlit/app.py` | Streamlit-based test interface for configuring, executing, and evaluating tests of the multi-agent supervisor system. |
+| UI Tests | `ui/streamlit/test_ui.py` | Playwright-based automated tests for the Streamlit test interface. |
 
 
 ## Configuration
@@ -53,3 +56,4 @@ This catalog lists all the documentation created for the multi-agent supervisor 
 | Environment Variables Example | `.env.example` | Provides an example of the environment variables needed to run the system, including API keys for various services. |
 | Requirements | `requirements.txt` | Lists all the Python dependencies required to run the system. |
 | Monitoring UI | `docs/monitoring_ui.md` | Documentation for the monitoring UI and LangSmith integration for debugging and testing. |
+| Streamlit UI README | `ui/streamlit/README.md` | Documentation for the Streamlit test interface, including setup instructions, features, and best practices for UI testing. |
